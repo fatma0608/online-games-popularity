@@ -82,18 +82,31 @@ for c in steamspy_cols:
 
 df['target_log'] = np.log1p(df['RecommendationCount'])
 
+# ─────────────────────────────────────────────
+# DROP ALL TEXT / STRING COLUMNS (no text features)
+# ─────────────────────────────────────────────
 drop_text_cols = [
     'QueryName', 'ResponseName', 'Website', 'SupportEmail', 'SupportURL',
     'LegalNotice', 'Reviews', 'SupportedLanguages', 'ShortDescrip',
     'DetailedDescrip', 'DRMNotice', 'ExtUserAcctNotice', 'PriceCurrency',
     'Background', 'HeaderImage',
+    # Also drop raw text source columns used to derive features
+    'AboutText', 'PCMinReqsText', 'PCRecReqsText',
+    'LinuxMinReqsText', 'MacMinReqsText',
 ]
 df.drop(columns=[c for c in drop_text_cols if c in df.columns], inplace=True)
 
+# Drop any remaining object/string columns
+remaining_text = df.select_dtypes(include='object').columns.tolist()
+if remaining_text:
+    print(f"\nDropping remaining object columns: {remaining_text}")
+    df.drop(columns=remaining_text, inplace=True)
+
+print(f"\nColumns after dropping text features: {df.columns.tolist()}")
+
 # ─────────────────────────────────────────────
-# DEFINE BINARY / CATEGORICAL FLAGS  (skip scaling & outlier capping)
+# DEFINE BINARY / CATEGORICAL FLAGS
 # ─────────────────────────────────────────────
-# These are 0/1 flag columns – no outliers, no scaling needed
 BINARY_PATTERNS = [
     'IsFree', 'FreeVerAvail', 'PurchaseAvail', 'SubscriptionAvail',
     'ControllerSupport',
@@ -114,10 +127,9 @@ BINARY_PATTERNS = [
     'has_pc_min_reqs', 'has_pc_rec_reqs',
     'has_linux_min_reqs', 'has_mac_min_reqs',
     'has_drm', 'has_ext_account',
-    'discount_ratio',        # already clipped [0,1] → treat as continuous-bounded
+    'discount_ratio',
 ]
 
-# True continuous columns to process
 CONTINUOUS_COLS = [
     'RequiredAge', 'DemoCount', 'DeveloperCount', 'DLCCount',
     'MovieCount', 'PackageCount', 'RecommendationCount', 'PublisherCount',
@@ -134,12 +146,11 @@ CONTINUOUS_COLS = [
     'target_log',
 ]
 
-# Keep only columns that are actually present
 CONTINUOUS_COLS = [c for c in CONTINUOUS_COLS if c in df.columns]
 print(f"\n>>> Continuous columns to process ({len(CONTINUOUS_COLS)}):\n", CONTINUOUS_COLS)
 
 # ─────────────────────────────────────────────
-# TRAIN / VAL / TEST SPLIT  (before any fitting)
+# TRAIN / VAL / TEST SPLIT
 # ─────────────────────────────────────────────
 X = df.drop(columns=['RecommendationCount', 'target_log'])
 y = df['target_log']
@@ -147,7 +158,7 @@ y = df['target_log']
 X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
 X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.1765, random_state=42)
 
-# Fill numeric NaNs using train medians (fitted on train only)
+# Fill numeric NaNs using train medians
 num_cols_all = X_train.select_dtypes(include=np.number).columns
 X_train[num_cols_all] = X_train[num_cols_all].fillna(X_train[num_cols_all].median())
 X_val[num_cols_all]   = X_val[num_cols_all].fillna(X_train[num_cols_all].median())
@@ -158,9 +169,7 @@ print("\nRemaining NaNs after median fill:",
       X_val.isnull().sum().sum(),
       X_test.isnull().sum().sum())
 
-# Continuous cols present in X (exclude target_log which stays in y)
 cont_feat_cols = [c for c in CONTINUOUS_COLS if c in X_train.columns]
-
 # ─────────────────────────────────────────────────────────────────
 # HELPER: grid of before/after histograms
 # ─────────────────────────────────────────────────────────────────
@@ -269,16 +278,15 @@ def plot_boxplots(before_df, after_df, cols, title, filename):
     print(f"  Saved: {filename}")
 
 
-# ─────────────────────────────────────────────────────────────────
-# STEP 1  — OUTLIER CAPPING via IQR (Winsorization) on TRAIN only
-# ─────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────
+# STEP 1 — OUTLIER CAPPING via IQR
+# ─────────────────────────────────────────────
 print("\n" + "="*60)
 print("STEP 1: IQR Outlier Capping")
 print("="*60)
 
-X_train_raw = X_train.copy()   # keep raw snapshot for plotting
-
-iqr_bounds = {}   # fitted on train, applied to val / test
+iqr_bounds = {}
 
 for col in cont_feat_cols:
     Q1 = X_train[col].quantile(0.25)
@@ -294,33 +302,13 @@ for col in cont_feat_cols:
     X_test[col]  = X_test[col].clip(lower, upper)
     print(f"  {col:45s}  bounds=[{lower:10.2f}, {upper:10.2f}]  clipped={n_before}")
 
-# Plot: distributions before vs after outlier capping
-print("\nPlotting outlier capping distributions …")
-plot_distributions(
-    X_train_raw, X_train, PLOT_COLS_SAMPLE,
-    title="Outlier Capping — Distribution: Before vs After",
-    filename="./plots/outlier_distributions.png",
-    before_label="Raw",
-    after_label="IQR Capped",
-)
-
-# Plot: box plots before vs after outlier capping
-print("Plotting outlier capping box plots …")
-plot_boxplots(
-    X_train_raw, X_train, PLOT_COLS_SAMPLE,
-    title="Outlier Capping — Box Plots: Before vs After",
-    filename="./plots/outlier_boxplots.png",
-)
-
-# ─────────────────────────────────────────────────────────────────
-# STEP 2  — STANDARD SCALING (continuous columns ONLY)
-# ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# STEP 2 — STANDARD SCALING
+# ─────────────────────────────────────────────
 print("\n" + "="*60)
 print("STEP 2: Standard Scaling (continuous columns only)")
 print("="*60)
-
-X_train_precap = X_train.copy()   # snapshot for scaling plot (after capping, before scaling)
-
+X_train_precap = X_train.copy()  # for before/after comparison plots
 scaler = StandardScaler()
 X_train[cont_feat_cols] = scaler.fit_transform(X_train[cont_feat_cols])
 X_val[cont_feat_cols]   = scaler.transform(X_val[cont_feat_cols])
@@ -329,9 +317,7 @@ X_test[cont_feat_cols]  = scaler.transform(X_test[cont_feat_cols])
 print(f"\nScaled {len(cont_feat_cols)} continuous columns.")
 print("Binary/flag columns left untouched:")
 binary_present = [c for c in BINARY_PATTERNS if c in X_train.columns]
-print(" ", binary_present)
-
-# Sanity check
+print("Binary/flag columns left untouched:", binary_present)
 scaled_stats = X_train[cont_feat_cols].describe().T[['mean', 'std']].round(4)
 print("\nPost-scaling stats (should be ~mean=0, std=1):")
 print(scaled_stats.to_string())
@@ -357,44 +343,31 @@ plot_boxplots(
 )
 
 # ─────────────────────────────────────────────────────────────────
-# STEP 3  — COMBINED OVERVIEW: Raw → Capped → Scaled
+# SAVE PROCESSED DATA
 # ─────────────────────────────────────────────────────────────────
-print("\nPlotting combined overview …")
+print("\n" + "="*60)
+print("SAVING PROCESSED DATA")
+print("="*60)
 
-OVERVIEW_COLS = ['SteamSpyOwners', 'AchievementCount', 'PriceInitial',
-                 'DLCCount', 'about_length', 'game_age_days']
-OVERVIEW_COLS = [c for c in OVERVIEW_COLS if c in cont_feat_cols]
+os.makedirs('./data/processed', exist_ok=True)
 
-fig, axes = plt.subplots(len(OVERVIEW_COLS), 3,
-                         figsize=(16, len(OVERVIEW_COLS) * 2.8),
-                         facecolor='#F8F7F4')
-fig.suptitle("Full Pipeline: Raw → IQR Capped → Standardized",
-             fontsize=15, fontweight='600', y=1.01, color='#2C2C2A')
+# Combine X and y back together for saving
+train_df = X_train.copy()
+train_df['target_log'] = y_train.values
 
-COLORS = ['#4C8EDA', '#E8593C', '#7F77DD']
-LABELS = ['Raw', 'IQR Capped', 'Standardized']
-SOURCES = [X_train_raw, X_train_precap, X_train]
+val_df = X_val.copy()
+val_df['target_log'] = y_val.values
 
-for row_i, col in enumerate(OVERVIEW_COLS):
-    for col_j, (src, clr, lbl) in enumerate(zip(SOURCES, COLORS, LABELS)):
-        ax = axes[row_i][col_j]
-        ax.set_facecolor('#F0EFE8')
-        vals = src[col].dropna()
-        ax.hist(vals, bins=50, color=clr, alpha=0.85, edgecolor='white', linewidth=0.3)
-        if row_i == 0:
-            ax.set_title(lbl, fontsize=10, fontweight='500',
-                         color=clr, pad=6)
-        if col_j == 0:
-            ax.set_ylabel(col, fontsize=8, fontweight='500', color='#2C2C2A')
-        ax.tick_params(labelsize=7)
-        mu = vals.mean()
-        ax.axvline(mu, color='#2C2C2A', linewidth=1, linestyle='--', alpha=0.6)
+test_df = X_test.copy()
+test_df['target_log'] = y_test.values
 
-plt.tight_layout()
-plt.savefig('./plots/full_pipeline_overview.png', dpi=130,
-            bbox_inches='tight', facecolor='#F8F7F4')
-plt.close()
-print("  Saved: ./plots/full_pipeline_overview.png")
+# train_df.to_csv('./data/processed/train.csv', index=False)
+# val_df.to_csv('./data/processed/val.csv', index=False)
+# test_df.to_csv('./data/processed/test.csv', index=False)
+
+# print(f"  Saved: ./data/processed/train.csv  → shape {train_df.shape}")
+# print(f"  Saved: ./data/processed/val.csv    → shape {val_df.shape}")
+# print(f"  Saved: ./data/processed/test.csv   → shape {test_df.shape}")
 
 # ─────────────────────────────────────────────────────────────────
 # FINAL SUMMARY
@@ -407,9 +380,8 @@ print(f"X_val   : {X_val.shape}")
 print(f"X_test  : {X_test.shape}")
 print(f"\nContinuous cols scaled   : {len(cont_feat_cols)}")
 print(f"Binary/flag cols intact  : {len(binary_present)}")
-print("\nDone. Plots saved:")
-print("  outlier_distributions.png")
-print("  outlier_boxplots.png")
-print("  scaling_distributions.png")
-print("  scaling_boxplots.png")
-print("  full_pipeline_overview.png")
+print(f"Text feature columns     : 0 (all dropped)")
+print("\nDone. Processed files saved:")
+print("  ./data/processed/train.csv")
+print("  ./data/processed/val.csv")
+print("  ./data/processed/test.csv")
