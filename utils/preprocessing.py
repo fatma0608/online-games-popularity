@@ -11,7 +11,7 @@ warnings.filterwarnings('ignore')
 # ─────────────────────────────────────────────
 # LOAD DATA
 # ─────────────────────────────────────────────
-df = pd.read_csv('./data/train_data.csv')
+df = pd.read_csv('./data/raw/train_data.csv')
 print(df.head())
 
 missing_val = pd.DataFrame({
@@ -119,7 +119,7 @@ BINARY_PATTERNS = [
 
 # True continuous columns to process
 CONTINUOUS_COLS = [
-    'RequiredAge', 'DemoCount', 'DeveloperCount', 'DLCCount', 'Metacritic',
+    'RequiredAge', 'DemoCount', 'DeveloperCount', 'DLCCount',
     'MovieCount', 'PackageCount', 'RecommendationCount', 'PublisherCount',
     'ScreenshotCount',
     'SteamSpyOwners', 'SteamSpyOwnersVariance',
@@ -353,7 +353,7 @@ print("Plotting scaling box plots …")
 plot_boxplots(
     X_train_precap, X_train, PLOT_COLS_SAMPLE,
     title="Standard Scaling — Box Plots: Before vs After",
-    filename="./plot_02b_scaling_boxplots.png",
+    filename="./plots/scaling_boxplots.png",
 )
 
 # ─────────────────────────────────────────────────────────────────

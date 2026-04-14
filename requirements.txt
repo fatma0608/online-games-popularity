@@ -1,0 +1,11 @@
+
+# use this file to list your project dependencies, one per line.
+# pip install -r requirements.txt
+
+pandas
+numpy
+matplotlib
+scikit-learn
+scipy
+nltk
+streamlit
