@@ -1,0 +1,415 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import os
+import warnings
+warnings.filterwarnings('ignore')
+
+# ─────────────────────────────────────────────
+# LOAD DATA
+# ─────────────────────────────────────────────
+df = pd.read_csv('./data/train_data.csv')
+print(df.head())
+
+missing_val = pd.DataFrame({
+    "Nulls": df.isnull().sum(),
+    "Percent": df.isnull().mean() * 100
+}).sort_values(by="Percent", ascending=False)
+print("\nMissing Values:\n", missing_val)
+
+high_missing = df.isnull().mean()
+drop_cols = high_missing[high_missing > 0.5].index
+df.drop(columns=drop_cols, inplace=True)
+print("\nDropped high missing columns:", list(drop_cols))
+
+constant_cols = [col for col in df.columns if df[col].nunique() == 1]
+print("\nConstant columns:", constant_cols)
+bool_cols = [c for c in df.columns if df[c].dtype == bool]
+df[bool_cols] = df[bool_cols].astype(int)
+bool_variance = df[bool_cols].var().sort_values()
+low_var_bool = bool_variance[bool_variance < 0.001].index
+df.drop(columns=low_var_bool, inplace=True)
+print("\nDropped low variance bool columns:", list(low_var_bool))
+
+df.drop(columns=['QueryID', 'ResponseID'], inplace=True, errors='ignore')
+
+df['ReleaseDate'] = pd.to_datetime(df['ReleaseDate'], errors='coerce')
+df['release_year'] = df['ReleaseDate'].dt.year
+df['release_month'] = df['ReleaseDate'].dt.month
+df['game_age_days'] = (pd.Timestamp.today() - df['ReleaseDate']).dt.days
+df['release_year'] = df['release_year'].fillna(df['release_year'].median())
+df['release_month'] = df['release_month'].fillna(6)
+df['game_age_days'] = df['game_age_days'].fillna(df['game_age_days'].median())
+df.drop(columns=['ReleaseDate'], inplace=True)
+
+df['discount_ratio'] = (
+    (df['PriceInitial'] - df['PriceFinal']) /
+    (df['PriceInitial'] + 1e-9)
+).clip(0, 1)
+
+df['is_effectively_free'] = (
+    (df['PriceInitial'] == 0) | (df['IsFree'] == 1)
+).astype(int)
+
+df['has_metacritic']     = (df['Metacritic'] > 0).astype(int)
+df['num_languages']      = df['SupportedLanguages'].fillna('').apply(
+    lambda x: len([w for w in x.split(' ') if len(w) > 2]))
+
+df['has_website']        = df['Website'].notna().astype(int)
+df['has_support_email']  = df['SupportEmail'].notna().astype(int)
+df['has_support_url']    = df['SupportURL'].notna().astype(int)
+df['has_legal_notice']   = df['LegalNotice'].fillna('').apply(lambda x: 1 if len(x.strip()) > 1 else 0)
+df['has_reviews_text']   = df['Reviews'].fillna('').apply(lambda x: 1 if len(x.strip()) > 5 else 0)
+df['about_length']       = df['AboutText'].fillna('').apply(len)
+df['short_length']       = df['ShortDescrip'].fillna('').apply(len)
+df['detail_length']      = df['DetailedDescrip'].fillna('').apply(len)
+df['has_pc_min_reqs']    = df['PCMinReqsText'].fillna('').apply(lambda x: 1 if len(x.strip()) > 5 else 0)
+df['has_pc_rec_reqs']    = df['PCRecReqsText'].fillna('').apply(lambda x: 1 if len(x.strip()) > 5 else 0)
+df['has_linux_min_reqs'] = df['LinuxMinReqsText'].fillna('').apply(lambda x: 1 if len(x.strip()) > 5 else 0)
+df['has_mac_min_reqs']   = df['MacMinReqsText'].fillna('').apply(lambda x: 1 if len(x.strip()) > 5 else 0)
+df['has_drm']            = df['DRMNotice'].fillna('').apply(lambda x: 1 if len(x.strip()) > 1 else 0)
+df['has_ext_account']    = df['ExtUserAcctNotice'].fillna('').apply(lambda x: 1 if len(x.strip()) > 1 else 0)
+
+steamspy_cols = [
+    'SteamSpyOwners', 'SteamSpyOwnersVariance',
+    'SteamSpyPlayersEstimate', 'SteamSpyPlayersVariance'
+]
+for c in steamspy_cols:
+    df[f'{c}_log'] = np.log1p(df[c])
+
+df['target_log'] = np.log1p(df['RecommendationCount'])
+
+drop_text_cols = [
+    'QueryName', 'ResponseName', 'Website', 'SupportEmail', 'SupportURL',
+    'LegalNotice', 'Reviews', 'SupportedLanguages', 'ShortDescrip',
+    'DetailedDescrip', 'DRMNotice', 'ExtUserAcctNotice', 'PriceCurrency',
+    'Background', 'HeaderImage',
+]
+df.drop(columns=[c for c in drop_text_cols if c in df.columns], inplace=True)
+
+# ─────────────────────────────────────────────
+# DEFINE BINARY / CATEGORICAL FLAGS  (skip scaling & outlier capping)
+# ─────────────────────────────────────────────
+# These are 0/1 flag columns – no outliers, no scaling needed
+BINARY_PATTERNS = [
+    'IsFree', 'FreeVerAvail', 'PurchaseAvail', 'SubscriptionAvail',
+    'ControllerSupport',
+    'PlatformLinux', 'PlatformMac',
+    'PCReqsHaveMin', 'PCReqsHaveRec',
+    'LinuxReqsHaveMin', 'LinuxReqsHaveRec',
+    'MacReqsHaveMin', 'MacReqsHaveRec',
+    'CategorySinglePlayer', 'CategoryMultiplayer', 'CategoryCoop',
+    'CategoryMMO', 'CategoryInAppPurchase', 'CategoryIncludeSrcSDK',
+    'CategoryIncludeLevelEditor', 'CategoryVRSupport',
+    'GenreIsNonGame', 'GenreIsIndie', 'GenreIsAction', 'GenreIsAdventure',
+    'GenreIsCasual', 'GenreIsStrategy', 'GenreIsRPG', 'GenreIsSimulation',
+    'GenreIsEarlyAccess', 'GenreIsFreeToPlay', 'GenreIsSports',
+    'GenreIsRacing', 'GenreIsMassivelyMultiplayer',
+    'is_effectively_free', 'has_metacritic',
+    'has_website', 'has_support_email', 'has_support_url',
+    'has_legal_notice', 'has_reviews_text',
+    'has_pc_min_reqs', 'has_pc_rec_reqs',
+    'has_linux_min_reqs', 'has_mac_min_reqs',
+    'has_drm', 'has_ext_account',
+    'discount_ratio',        # already clipped [0,1] → treat as continuous-bounded
+]
+
+# True continuous columns to process
+CONTINUOUS_COLS = [
+    'RequiredAge', 'DemoCount', 'DeveloperCount', 'DLCCount', 'Metacritic',
+    'MovieCount', 'PackageCount', 'RecommendationCount', 'PublisherCount',
+    'ScreenshotCount',
+    'SteamSpyOwners', 'SteamSpyOwnersVariance',
+    'SteamSpyPlayersEstimate', 'SteamSpyPlayersVariance',
+    'AchievementCount', 'AchievementHighlightedCount',
+    'PriceInitial', 'PriceFinal',
+    'release_year', 'release_month', 'game_age_days',
+    'num_languages',
+    'about_length', 'short_length', 'detail_length',
+    'SteamSpyOwners_log', 'SteamSpyOwnersVariance_log',
+    'SteamSpyPlayersEstimate_log', 'SteamSpyPlayersVariance_log',
+    'target_log',
+]
+
+# Keep only columns that are actually present
+CONTINUOUS_COLS = [c for c in CONTINUOUS_COLS if c in df.columns]
+print(f"\n>>> Continuous columns to process ({len(CONTINUOUS_COLS)}):\n", CONTINUOUS_COLS)
+
+# ─────────────────────────────────────────────
+# TRAIN / VAL / TEST SPLIT  (before any fitting)
+# ─────────────────────────────────────────────
+X = df.drop(columns=['RecommendationCount', 'target_log'])
+y = df['target_log']
+
+X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
+X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.1765, random_state=42)
+
+# Fill numeric NaNs using train medians (fitted on train only)
+num_cols_all = X_train.select_dtypes(include=np.number).columns
+X_train[num_cols_all] = X_train[num_cols_all].fillna(X_train[num_cols_all].median())
+X_val[num_cols_all]   = X_val[num_cols_all].fillna(X_train[num_cols_all].median())
+X_test[num_cols_all]  = X_test[num_cols_all].fillna(X_train[num_cols_all].median())
+
+print("\nRemaining NaNs after median fill:",
+      X_train.isnull().sum().sum(),
+      X_val.isnull().sum().sum(),
+      X_test.isnull().sum().sum())
+
+# Continuous cols present in X (exclude target_log which stays in y)
+cont_feat_cols = [c for c in CONTINUOUS_COLS if c in X_train.columns]
+
+# ─────────────────────────────────────────────────────────────────
+# HELPER: grid of before/after histograms
+# ─────────────────────────────────────────────────────────────────
+PLOT_COLS_SAMPLE = [
+    'RequiredAge', 'DLCCount', 'Metacritic', 'MovieCount',
+    'SteamSpyOwners', 'AchievementCount', 'PriceInitial',
+    'game_age_days', 'about_length', 'detail_length',
+    'SteamSpyOwners_log', 'SteamSpyPlayersEstimate_log',
+]
+PLOT_COLS_SAMPLE = [c for c in PLOT_COLS_SAMPLE if c in cont_feat_cols]
+
+def plot_distributions(before_df, after_df, cols, title, filename,
+                       before_label='Before', after_label='After',
+                       color_before='#4C8EDA', color_after='#E8593C'):
+    n = len(cols)
+    ncols = 4
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows * 2, ncols,
+                             figsize=(ncols * 4.5, nrows * 5),
+                             facecolor='#F8F7F4')
+    fig.suptitle(title, fontsize=16, fontweight='600', y=1.01, color='#2C2C2A')
+
+    for i, col in enumerate(cols):
+        row_before = (i // ncols) * 2
+        row_after  = row_before + 1
+        col_idx    = i % ncols
+
+        ax_b = axes[row_before][col_idx]
+        ax_a = axes[row_after][col_idx]
+
+        # Before
+        vals_b = before_df[col].dropna()
+        ax_b.hist(vals_b, bins=50, color=color_before, alpha=0.85, edgecolor='white', linewidth=0.3)
+        ax_b.set_title(col, fontsize=9, fontweight='500', color='#2C2C2A', pad=4)
+        ax_b.set_ylabel(before_label, fontsize=8, color='#5F5E5A')
+        ax_b.tick_params(labelsize=7)
+        ax_b.set_facecolor('#F0EFE8')
+        _add_stats(ax_b, vals_b, color_before)
+
+        # After
+        vals_a = after_df[col].dropna()
+        ax_a.hist(vals_a, bins=50, color=color_after, alpha=0.85, edgecolor='white', linewidth=0.3)
+        ax_a.set_ylabel(after_label, fontsize=8, color='#5F5E5A')
+        ax_a.tick_params(labelsize=7)
+        ax_a.set_facecolor('#F0EFE8')
+        _add_stats(ax_a, vals_a, color_after)
+
+    # Hide unused axes
+    total_slots = nrows * 2 * ncols
+    for j in range(n, (nrows) * ncols):
+        r_b = (j // ncols) * 2
+        r_a = r_b + 1
+        c_j = j % ncols
+        axes[r_b][c_j].set_visible(False)
+        axes[r_a][c_j].set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+    plt.close()
+    print(f"  Saved: {filename}")
+
+
+def _add_stats(ax, vals, color):
+    mu, med = vals.mean(), vals.median()
+    ax.axvline(mu,  color='#2C2C2A', linewidth=1.2, linestyle='--', alpha=0.7, label=f'μ={mu:.2f}')
+    ax.axvline(med, color='#888780', linewidth=1.0, linestyle=':',  alpha=0.7, label=f'med={med:.2f}')
+    ax.legend(fontsize=6.5, framealpha=0.6, loc='upper right')
+
+
+def plot_boxplots(before_df, after_df, cols, title, filename):
+    """Side-by-side box plots before / after for each column."""
+    n = len(cols)
+    ncols = 4
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(ncols * 4.5, nrows * 3.5),
+                             facecolor='#F8F7F4')
+    fig.suptitle(title, fontsize=15, fontweight='600', y=1.01, color='#2C2C2A')
+    axes = axes.flatten()
+
+    bp_props = dict(patch_artist=True, notch=False, vert=True,
+                    medianprops=dict(color='#2C2C2A', linewidth=1.5),
+                    whiskerprops=dict(linewidth=0.8),
+                    capprops=dict(linewidth=0.8),
+                    flierprops=dict(marker='.', markersize=2, alpha=0.4))
+
+    for i, col in enumerate(cols):
+        ax = axes[i]
+        ax.set_facecolor('#F0EFE8')
+        vb = before_df[col].dropna().values
+        va = after_df[col].dropna().values
+        bp = ax.boxplot([vb, va], labels=['Before', 'After'], **bp_props)
+        bp['boxes'][0].set_facecolor('#4C8EDA')
+        bp['boxes'][0].set_alpha(0.75)
+        bp['boxes'][1].set_facecolor('#E8593C')
+        bp['boxes'][1].set_alpha(0.75)
+        ax.set_title(col, fontsize=9, fontweight='500', color='#2C2C2A', pad=4)
+        ax.tick_params(labelsize=8)
+
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+    plt.close()
+    print(f"  Saved: {filename}")
+
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 1  — OUTLIER CAPPING via IQR (Winsorization) on TRAIN only
+# ─────────────────────────────────────────────────────────────────
+print("\n" + "="*60)
+print("STEP 1: IQR Outlier Capping")
+print("="*60)
+
+X_train_raw = X_train.copy()   # keep raw snapshot for plotting
+
+iqr_bounds = {}   # fitted on train, applied to val / test
+
+for col in cont_feat_cols:
+    Q1 = X_train[col].quantile(0.25)
+    Q3 = X_train[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+    iqr_bounds[col] = (lower, upper)
+
+    n_before = ((X_train[col] < lower) | (X_train[col] > upper)).sum()
+    X_train[col] = X_train[col].clip(lower, upper)
+    X_val[col]   = X_val[col].clip(lower, upper)
+    X_test[col]  = X_test[col].clip(lower, upper)
+    print(f"  {col:45s}  bounds=[{lower:10.2f}, {upper:10.2f}]  clipped={n_before}")
+
+# Plot: distributions before vs after outlier capping
+print("\nPlotting outlier capping distributions …")
+plot_distributions(
+    X_train_raw, X_train, PLOT_COLS_SAMPLE,
+    title="Outlier Capping — Distribution: Before vs After",
+    filename="./plots/outlier_distributions.png",
+    before_label="Raw",
+    after_label="IQR Capped",
+)
+
+# Plot: box plots before vs after outlier capping
+print("Plotting outlier capping box plots …")
+plot_boxplots(
+    X_train_raw, X_train, PLOT_COLS_SAMPLE,
+    title="Outlier Capping — Box Plots: Before vs After",
+    filename="./plots/outlier_boxplots.png",
+)
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 2  — STANDARD SCALING (continuous columns ONLY)
+# ─────────────────────────────────────────────────────────────────
+print("\n" + "="*60)
+print("STEP 2: Standard Scaling (continuous columns only)")
+print("="*60)
+
+X_train_precap = X_train.copy()   # snapshot for scaling plot (after capping, before scaling)
+
+scaler = StandardScaler()
+X_train[cont_feat_cols] = scaler.fit_transform(X_train[cont_feat_cols])
+X_val[cont_feat_cols]   = scaler.transform(X_val[cont_feat_cols])
+X_test[cont_feat_cols]  = scaler.transform(X_test[cont_feat_cols])
+
+print(f"\nScaled {len(cont_feat_cols)} continuous columns.")
+print("Binary/flag columns left untouched:")
+binary_present = [c for c in BINARY_PATTERNS if c in X_train.columns]
+print(" ", binary_present)
+
+# Sanity check
+scaled_stats = X_train[cont_feat_cols].describe().T[['mean', 'std']].round(4)
+print("\nPost-scaling stats (should be ~mean=0, std=1):")
+print(scaled_stats.to_string())
+
+# Plot: distributions before vs after scaling
+print("\nPlotting scaling distributions …")
+plot_distributions(
+    X_train_precap, X_train, PLOT_COLS_SAMPLE,
+    title="Standard Scaling — Distribution: Before vs After",
+    filename="./plots/scaling_distributions.png",
+    before_label="IQR Capped",
+    after_label="Standardized",
+    color_before='#1D9E75',
+    color_after='#7F77DD',
+)
+
+# Plot: box plots before vs after scaling
+print("Plotting scaling box plots …")
+plot_boxplots(
+    X_train_precap, X_train, PLOT_COLS_SAMPLE,
+    title="Standard Scaling — Box Plots: Before vs After",
+    filename="./plot_02b_scaling_boxplots.png",
+)
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 3  — COMBINED OVERVIEW: Raw → Capped → Scaled
+# ─────────────────────────────────────────────────────────────────
+print("\nPlotting combined overview …")
+
+OVERVIEW_COLS = ['SteamSpyOwners', 'AchievementCount', 'PriceInitial',
+                 'DLCCount', 'about_length', 'game_age_days']
+OVERVIEW_COLS = [c for c in OVERVIEW_COLS if c in cont_feat_cols]
+
+fig, axes = plt.subplots(len(OVERVIEW_COLS), 3,
+                         figsize=(16, len(OVERVIEW_COLS) * 2.8),
+                         facecolor='#F8F7F4')
+fig.suptitle("Full Pipeline: Raw → IQR Capped → Standardized",
+             fontsize=15, fontweight='600', y=1.01, color='#2C2C2A')
+
+COLORS = ['#4C8EDA', '#E8593C', '#7F77DD']
+LABELS = ['Raw', 'IQR Capped', 'Standardized']
+SOURCES = [X_train_raw, X_train_precap, X_train]
+
+for row_i, col in enumerate(OVERVIEW_COLS):
+    for col_j, (src, clr, lbl) in enumerate(zip(SOURCES, COLORS, LABELS)):
+        ax = axes[row_i][col_j]
+        ax.set_facecolor('#F0EFE8')
+        vals = src[col].dropna()
+        ax.hist(vals, bins=50, color=clr, alpha=0.85, edgecolor='white', linewidth=0.3)
+        if row_i == 0:
+            ax.set_title(lbl, fontsize=10, fontweight='500',
+                         color=clr, pad=6)
+        if col_j == 0:
+            ax.set_ylabel(col, fontsize=8, fontweight='500', color='#2C2C2A')
+        ax.tick_params(labelsize=7)
+        mu = vals.mean()
+        ax.axvline(mu, color='#2C2C2A', linewidth=1, linestyle='--', alpha=0.6)
+
+plt.tight_layout()
+plt.savefig('./plots/full_pipeline_overview.png', dpi=130,
+            bbox_inches='tight', facecolor='#F8F7F4')
+plt.close()
+print("  Saved: ./plots/full_pipeline_overview.png")
+
+# ─────────────────────────────────────────────────────────────────
+# FINAL SUMMARY
+# ─────────────────────────────────────────────────────────────────
+print("\n" + "="*60)
+print("FINAL DATASET SHAPES")
+print("="*60)
+print(f"X_train : {X_train.shape}")
+print(f"X_val   : {X_val.shape}")
+print(f"X_test  : {X_test.shape}")
+print(f"\nContinuous cols scaled   : {len(cont_feat_cols)}")
+print(f"Binary/flag cols intact  : {len(binary_present)}")
+print("\nDone. Plots saved:")
+print("  outlier_distributions.png")
+print("  outlier_boxplots.png")
+print("  scaling_distributions.png")
+print("  scaling_boxplots.png")
+print("  full_pipeline_overview.png")
