@@ -174,11 +174,13 @@ cont_feat_cols = [c for c in CONTINUOUS_COLS if c in X_train.columns]
 # HELPER: grid of before/after histograms
 # ─────────────────────────────────────────────────────────────────
 PLOT_COLS_SAMPLE = [
-    'RequiredAge', 'DLCCount', 'Metacritic', 'MovieCount',
+    'Metacritic', 'MovieCount',
     'SteamSpyOwners', 'AchievementCount', 'PriceInitial',
     'game_age_days', 'about_length', 'detail_length',
-    'SteamSpyOwners_log', 'SteamSpyPlayersEstimate_log',
+    'SteamSpyOwners_log', 'SteamSpyPlayersEstimate_log', 'release_year','game_age_days',
 ]
+
+
 PLOT_COLS_SAMPLE = [c for c in PLOT_COLS_SAMPLE if c in cont_feat_cols]
 
 def plot_distributions(before_df, after_df, cols, title, filename,
@@ -282,25 +284,91 @@ def plot_boxplots(before_df, after_df, cols, title, filename):
 # ─────────────────────────────────────────────
 # STEP 1 — OUTLIER CAPPING via IQR
 # ─────────────────────────────────────────────
+# RequiredAge,DemoCount,DeveloperCount,DLCCountPackageCount,PublisherCount
+NO_IQR_COLS = [
+    'RequiredAge',
+    'DemoCount',
+    'DeveloperCount',
+    'DLCCount',
+    'PackageCount',
+    'PublisherCount'
+]
 print("\n" + "="*60)
+
 print("STEP 1: IQR Outlier Capping")
 print("="*60)
 
 iqr_bounds = {}
-
+X_train_raw = X_train.copy()  # for before/after comparison plots
 for col in cont_feat_cols:
+
+    if col in NO_IQR_COLS:
+        print(f"  ⏭️ Skipping IQR for {col} (log transform instead)")
+        continue
+
     Q1 = X_train[col].quantile(0.25)
     Q3 = X_train[col].quantile(0.75)
     IQR = Q3 - Q1
+
+    # optional safety
+    if IQR == 0:
+        print(f"  ⚠️ Skipping {col} (IQR=0)")
+        continue
+
     lower = Q1 - 1.5 * IQR
     upper = Q3 + 1.5 * IQR
-    iqr_bounds[col] = (lower, upper)
 
     n_before = ((X_train[col] < lower) | (X_train[col] > upper)).sum()
+
     X_train[col] = X_train[col].clip(lower, upper)
     X_val[col]   = X_val[col].clip(lower, upper)
     X_test[col]  = X_test[col].clip(lower, upper)
+
     print(f"  {col:45s}  bounds=[{lower:10.2f}, {upper:10.2f}]  clipped={n_before}")
+
+
+for col in NO_IQR_COLS:
+    X_train[col] = np.log1p(X_train[col])
+    X_val[col]   = np.log1p(X_val[col])
+    X_test[col]  = np.log1p(X_test[col])
+
+    print(f"  🔄 Log transformed {col}")
+
+# remove constant/low variance columns after outlier capping (if any)
+threshold = 0.001  # حسب الداتا
+
+low_var_cols = []
+
+for col in X_train.columns:
+    var = X_train[col].var()
+    
+    if var < threshold:
+        low_var_cols.append(col)
+
+print("Low variance columns:", low_var_cols)
+
+# حذفهم
+X_train = X_train.drop(columns=low_var_cols)
+X_val   = X_val.drop(columns=low_var_cols)
+X_test  = X_test.drop(columns=low_var_cols)
+
+# Plot: distributions before vs after outlier capping
+print("\nPlotting outlier capping distributions …")
+plot_distributions(
+    X_train_raw, X_train, PLOT_COLS_SAMPLE,
+    title="Outlier Capping — Distribution: Before vs After",
+    filename="./plots/outlier_distributions.png",
+    before_label="Raw",
+    after_label="IQR Capped",
+)
+
+# Plot: box plots before vs after outlier capping
+print("Plotting outlier capping box plots …")
+plot_boxplots(
+    X_train_raw, X_train, PLOT_COLS_SAMPLE,
+    title="Outlier Capping — Box Plots: Before vs After",
+    filename="./plots/outlier_boxplots.png",
+)
 
 # ─────────────────────────────────────────────
 # STEP 2 — STANDARD SCALING
@@ -361,13 +429,13 @@ val_df['target_log'] = y_val.values
 test_df = X_test.copy()
 test_df['target_log'] = y_test.values
 
-# train_df.to_csv('./data/processed/train.csv', index=False)
-# val_df.to_csv('./data/processed/val.csv', index=False)
-# test_df.to_csv('./data/processed/test.csv', index=False)
+train_df.to_csv('./data/processed/train.csv', index=False)
+val_df.to_csv('./data/processed/val.csv', index=False)
+test_df.to_csv('./data/processed/test.csv', index=False)
 
-# print(f"  Saved: ./data/processed/train.csv  → shape {train_df.shape}")
-# print(f"  Saved: ./data/processed/val.csv    → shape {val_df.shape}")
-# print(f"  Saved: ./data/processed/test.csv   → shape {test_df.shape}")
+print(f"  Saved: ./data/processed/train.csv  → shape {train_df.shape}")
+print(f"  Saved: ./data/processed/val.csv    → shape {val_df.shape}")
+print(f"  Saved: ./data/processed/test.csv   → shape {test_df.shape}")
 
 # ─────────────────────────────────────────────────────────────────
 # FINAL SUMMARY
