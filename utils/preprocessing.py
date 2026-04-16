@@ -149,6 +149,21 @@ CONTINUOUS_COLS = [
 CONTINUOUS_COLS = [c for c in CONTINUOUS_COLS if c in df.columns]
 print(f"\n>>> Continuous columns to process ({len(CONTINUOUS_COLS)}):\n", CONTINUOUS_COLS)
 
+df['price_per_language'] = df['PriceFinal'] / (df['num_languages'] + 1)
+df['metacritic_x_age']   = df['has_metacritic'] * df['game_age_days']
+df['owners_per_achievement'] = df['SteamSpyOwners_log'] / (df['AchievementCount'] + 1)
+
+df['dlc_x_owners'] = np.log1p(df['DLCCount']) * df['SteamSpyOwners_log']
+df['movie_x_owners']  = df['MovieCount'] * df['SteamSpyOwners_log']
+CONTINUOUS_COLS += [
+    'price_per_language',
+    'metacritic_x_age',
+    'owners_per_achievement',
+    'dlc_x_owners',
+    'movie_x_owners',
+]
+
+CONTINUOUS_COLS = [c for c in CONTINUOUS_COLS if c in df.columns]
 # ─────────────────────────────────────────────
 # TRAIN / VAL / TEST SPLIT
 # ─────────────────────────────────────────────
@@ -335,7 +350,7 @@ for col in NO_IQR_COLS:
     print(f"  🔄 Log transformed {col}")
 
 # remove constant/low variance columns after outlier capping (if any)
-threshold = 0.001  # حسب الداتا
+threshold = 0.001  
 
 low_var_cols = []
 
@@ -347,10 +362,10 @@ for col in X_train.columns:
 
 print("Low variance columns:", low_var_cols)
 
-# حذفهم
-X_train = X_train.drop(columns=low_var_cols)
-X_val   = X_val.drop(columns=low_var_cols)
-X_test  = X_test.drop(columns=low_var_cols)
+
+#X_train = X_train.drop(columns=low_var_cols)
+#X_val   = X_val.drop(columns=low_var_cols)
+#X_test  = X_test.drop(columns=low_var_cols)
 
 # Plot: distributions before vs after outlier capping
 print("\nPlotting outlier capping distributions …")
@@ -369,7 +384,20 @@ plot_boxplots(
     title="Outlier Capping — Box Plots: Before vs After",
     filename="./plots/outlier_boxplots.png",
 )
+# ─────────────────────────────────────────────
+# ISOLATION FOREST (comparison with IQR capping)
+# ─────────────────────────────────────────────
+from sklearn.ensemble import IsolationForest
 
+iso = IsolationForest(contamination=0.05, random_state=42)
+outlier_mask = iso.fit_predict(X_train[cont_feat_cols]) == 1
+
+print(f"IQR kept     : {len(X_train)} rows")
+print(f"ISO kept     : {outlier_mask.sum()} rows")
+print(f"ISO removed  : {(~outlier_mask).sum()} rows")
+
+X_train_iso = X_train[outlier_mask].copy()
+y_train_iso = y_train[outlier_mask].copy()
 # ─────────────────────────────────────────────
 # STEP 2 — STANDARD SCALING
 # ─────────────────────────────────────────────
@@ -409,7 +437,38 @@ plot_boxplots(
     title="Standard Scaling — Box Plots: Before vs After",
     filename="./plots/scaling_boxplots.png",
 )
+# ─────────────────────────────────────────────
+# STEP 3 — MUTUAL INFORMATION (Feature Selection)
+# ─────────────────────────────────────────────
+from sklearn.feature_selection import mutual_info_regression
 
+mi_scores = mutual_info_regression(X_train, y_train, random_state=42)
+mi_df = pd.DataFrame({
+    'feature': X_train.columns,
+    'MI': mi_scores
+}).sort_values('MI', ascending=False)
+
+print("\nTop 20 features by MI:")
+print(mi_df.head(20).to_string())
+
+top20 = mi_df.head(20)
+plt.figure(figsize=(10, 6), facecolor='#F8F7F4')
+ax = plt.gca()
+ax.set_facecolor('#F0EFE8')
+ax.barh(top20['feature'][::-1], top20['MI'][::-1],
+        color='#7F77DD', alpha=0.85)
+ax.set_title('Top 20 Features — Mutual Information with Target',
+             fontsize=11, fontweight='500', color='#2C2C2A')
+ax.set_xlabel('MI Score', fontsize=9)
+ax.tick_params(labelsize=8)
+plt.tight_layout()
+plt.savefig('./plots/mutual_information.png', dpi=130,
+            bbox_inches='tight', facecolor='#F8F7F4')
+plt.close()
+print("Saved: ./plots/mutual_information.png")
+
+TOP_FEATURES = mi_df.head(5)['feature'].tolist()
+print("\nTop 5 for Polynomial Features:", TOP_FEATURES)
 # ─────────────────────────────────────────────────────────────────
 # SAVE PROCESSED DATA
 # ─────────────────────────────────────────────────────────────────
