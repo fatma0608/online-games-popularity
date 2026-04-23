@@ -242,9 +242,9 @@ with tab_pre:
             tr_out = X_train.copy(); tr_out['target_log']=y_train.values
             v_out  = X_val.copy();   v_out['target_log'] =y_val.values
             te_out = X_test.copy();  te_out['target_log']=y_test.values
-            tr_out.to_csv('./data/processed/train.csv', index=False)
-            v_out.to_csv('./data/processed/val.csv',    index=False)
-            te_out.to_csv('./data/processed/test.csv',  index=False)
+            # tr_out.to_csv('./data/processed/train.csv', index=False)
+            # v_out.to_csv('./data/processed/val.csv',    index=False)
+            # te_out.to_csv('./data/processed/test.csv',  index=False)
 
             L("// Done ✓ ─────────────────────────────────")
             st.session_state.update({"done":True,"X_train":X_train,"X_val":X_val,"X_test":X_test,
@@ -448,9 +448,9 @@ with tab_nlp:
             L2(f"  top NLP corr: {corrs_nlp.index[0]} = {corrs_nlp.iloc[0]:.4f}")
 
             os.makedirs('./data/processed',exist_ok=True)
-            nlp_train.to_csv('./data/processed/nlp_features_train.csv',index=False)
-            nlp_val.to_csv('./data/processed/nlp_features_val.csv',    index=False)
-            nlp_test.to_csv('./data/processed/nlp_features_test.csv',  index=False)
+            # nlp_train.to_csv('./data/processed/nlp_features_train.csv',index=False)
+            # nlp_val.to_csv('./data/processed/nlp_features_val.csv',    index=False)
+            # nlp_test.to_csv('./data/processed/nlp_features_test.csv',  index=False)
             L2("// NLP Done ✓ ──────────────────────────")
             st.session_state.update({"nlp_done":True,"raw_stats":raw_stats,"cleaned":cleaned,
                 "parts_tr":parts_tr,"vecs":vecs,"fnames_all":fnames_all,"TC":TC,"CFG":CFG,

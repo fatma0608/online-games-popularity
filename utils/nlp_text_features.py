@@ -125,7 +125,7 @@ STOP_WORDS  = set(stopwords.words('english'))
 # Extra domain-specific stopwords for game descriptions
 DOMAIN_STOP = {
     'game', 'games', 'play', 'player', 'players', 'feature', 'features',
-    'include', 'includes', 'new', 'get', 'also', 
+    'include', 'includes', 'new', 'get', 'also',
      'available', 'download', 'update', 'version',
     'support', 'use', 'using', 'system', 'may', 'will', 'can',
 }
@@ -214,11 +214,9 @@ TFIDF_CONFIG = {k: v for k, v in TFIDF_CONFIG.items() if k in cleaned}
 
 # ── Train/test split indices ──────────────────────────────────────
 idx = np.arange(len(df))
-idx_temp, idx_test = train_test_split(idx, test_size=0.15, random_state=42)
-idx_train, idx_val = train_test_split(idx_temp, test_size=0.1765, random_state=42)
+idx_train, idx_test = train_test_split(idx, test_size=0.15, random_state=42)
 
 tfidf_train_parts = []
-tfidf_val_parts   = []
 tfidf_test_parts  = []
 tfidf_vectorizers = {}
 tfidf_feature_names = {}
@@ -226,18 +224,15 @@ tfidf_feature_names = {}
 for key, cfg in TFIDF_CONFIG.items():
     texts = cleaned[key].values
     train_texts = texts[idx_train]
-    val_texts   = texts[idx_val]
     test_texts  = texts[idx_test]
 
     vec = TfidfVectorizer(**cfg)
     X_tr = vec.fit_transform(train_texts)
-    X_v  = vec.transform(val_texts)
     X_te = vec.transform(test_texts)
 
     tfidf_vectorizers[key]    = vec
     tfidf_feature_names[key]  = vec.get_feature_names_out()
     tfidf_train_parts.append(X_tr)
-    tfidf_val_parts.append(X_v)
     tfidf_test_parts.append(X_te)
 
     print(f"  [{key}]  vocab={len(vec.vocabulary_):,}  "
@@ -245,7 +240,6 @@ for key, cfg in TFIDF_CONFIG.items():
 
 # Stack all TF-IDF matrices horizontally
 tfidf_train = sp.hstack(tfidf_train_parts, format='csr')
-tfidf_val   = sp.hstack(tfidf_val_parts,   format='csr')
 tfidf_test  = sp.hstack(tfidf_test_parts,  format='csr')
 print(f"\n  Combined TF-IDF train: {tfidf_train.shape}")
 
@@ -323,12 +317,10 @@ N_COMPONENTS = 50   # tune: 30–100 for most datasets
 
 svd = TruncatedSVD(n_components=N_COMPONENTS, random_state=42)
 lsa_train = svd.fit_transform(tfidf_train)
-lsa_val   = svd.transform(tfidf_val)
 lsa_test  = svd.transform(tfidf_test)
 
 # Normalise LSA vectors (cosine-normalisation)
 lsa_train = normalize(lsa_train)
-lsa_val   = normalize(lsa_val)
 lsa_test  = normalize(lsa_test)
 
 explained = svd.explained_variance_ratio_.cumsum()
@@ -337,7 +329,6 @@ print(f"  Explained variance @ {N_COMPONENTS} components: {explained[-1]*100:.1f
 
 lsa_col_names = [f'lsa_{i}' for i in range(N_COMPONENTS)]
 lsa_train_df  = pd.DataFrame(lsa_train, columns=lsa_col_names, index=idx_train)
-lsa_val_df    = pd.DataFrame(lsa_val,   columns=lsa_col_names, index=idx_val)
 lsa_test_df   = pd.DataFrame(lsa_test,  columns=lsa_col_names, index=idx_test)
 
 # ── Plot 6: Explained variance + top-component word loadings ─────
@@ -420,17 +411,10 @@ print("\n" + "="*60)
 print("STEP 6: Assembling Final NLP Feature Sets")
 print("="*60)
 
-def build_split(idx_split, lsa_df):
-    return lsa_df.loc[idx_split].reset_index(drop=True)
-
-lsa_all_df = pd.concat([lsa_train_df, lsa_val_df, lsa_test_df]).sort_index()
-
-nlp_train = build_split(idx_train,  lsa_all_df)
-nlp_val   = build_split(idx_val,   lsa_all_df)
-nlp_test  = build_split(idx_test,   lsa_all_df)
+nlp_train = lsa_train_df.reset_index(drop=True)
+nlp_test  = lsa_test_df.reset_index(drop=True)
 
 print(f"  NLP feature shape  — train : {nlp_train.shape}")
-print(f"  NLP feature shape  — val   : {nlp_val.shape}")
 print(f"  NLP feature shape  — test  : {nlp_test.shape}")
 
 # ── Plot 8: LSA feature distribution comparison (train vs test) ───
@@ -485,46 +469,26 @@ if 'RecommendationCount' in df.columns:
 
 # ── Save outputs ──────────────────────────────────────────────────
 nlp_train.to_csv('./data/processed/nlp_features_train.csv', index=False)
-nlp_val.to_csv('./data/processed/nlp_features_val.csv',     index=False)
 nlp_test.to_csv('./data/processed/nlp_features_test.csv',   index=False)
-
-
-
-# Save
-# joblib.dump(tfidf_vectorizers, './models/tfidf.pkl')
-# joblib.dump(svd,               './models/lsa.pkl')
-
-# Load later
-# tfidf_vectorizers = joblib.load('./models/tfidf.pkl')
-# svd               = joblib.load('./models/lsa.pkl')
-# Also save sparse TF-IDF matrices for downstream use
-# save_npz('./tfidf_train.npz', tfidf_train)
-# save_npz('./tfidf_val.npz',   tfidf_val)
-# save_npz('./tfidf_test.npz',  tfidf_test)
 
 print("\n" + "="*60)
 print("OUTPUTS SAVED")
 print("="*60)
-print("  nlp_features_train.csv  — dense NLP features (handcrafted + LSA)")
-print("  nlp_features_val.csv")
+print("  nlp_features_train.csv  — dense NLP features (LSA)")
 print("  nlp_features_test.csv")
-print("  tfidf_train.npz          — raw sparse TF-IDF matrices")
-print("  tfidf_val.npz")
-print("  tfidf_test.npz")
 print()
 print("PLOTS:")
-for i in range(1, 9):
-    fnames = {
-        1: "plot_nlp_01_raw_word_counts.png          — raw word count distributions",
-        2: "plot_nlp_02_cleaning_before_after.png    — word count before/after cleaning",
-        3: "plot_nlp_04_tfidf_top_terms.png          — top TF-IDF terms per field",
-        4: "plot_nlp_05_tfidf_sparsity.png           — TF-IDF sparsity heatmap",
-        5: "plot_nlp_06_lsa_variance.png             — LSA explained variance (scree)",
-        6: "plot_nlp_07_lsa_components.png           — top words per LSA component",
-        7: "plot_nlp_08_lsa_train_vs_test.png        — LSA feature distributions",
-        8: "plot_nlp_09_nlp_feature_correlations.png — NLP feature vs target correlation",
-    }
-    print(f"  {fnames[i]}")
+for fname in [
+    "plot_nlp_01_raw_word_counts.png          — raw word count distributions",
+    "plot_nlp_02_cleaning_before_after.png    — word count before/after cleaning",
+    "plot_nlp_04_tfidf_top_terms.png          — top TF-IDF terms per field",
+    "plot_nlp_05_tfidf_sparsity.png           — TF-IDF sparsity heatmap",
+    "plot_nlp_06_lsa_variance.png             — LSA explained variance (scree)",
+    "plot_nlp_07_lsa_components.png           — top words per LSA component",
+    "plot_nlp_08_lsa_train_vs_test.png        — LSA feature distributions",
+    "plot_nlp_09_nlp_feature_correlations.png — NLP feature vs target correlation",
+]:
+    print(f"  {fname}")
 
 print(f"\nTotal NLP features per split: {nlp_train.shape[1]}")
 print(f"  LSA (dense) : {N_COMPONENTS}")

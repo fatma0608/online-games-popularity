@@ -170,18 +170,18 @@ CONTINUOUS_COLS = [c for c in CONTINUOUS_COLS if c in df.columns]
 X = df.drop(columns=['RecommendationCount', 'target_log'])
 y = df['target_log']
 
-X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
-X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.1765, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42)
+# X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.1765, random_state=42)
 
 # Fill numeric NaNs using train medians
 num_cols_all = X_train.select_dtypes(include=np.number).columns
 X_train[num_cols_all] = X_train[num_cols_all].fillna(X_train[num_cols_all].median())
-X_val[num_cols_all]   = X_val[num_cols_all].fillna(X_train[num_cols_all].median())
+# X_val[num_cols_all]   = X_val[num_cols_all].fillna(X_train[num_cols_all].median())
 X_test[num_cols_all]  = X_test[num_cols_all].fillna(X_train[num_cols_all].median())
 
 print("\nRemaining NaNs after median fill:",
       X_train.isnull().sum().sum(),
-      X_val.isnull().sum().sum(),
+    #   y_train.isnull().sum().sum(),
       X_test.isnull().sum().sum())
 
 cont_feat_cols = [c for c in CONTINUOUS_COLS if c in X_train.columns]
@@ -336,7 +336,7 @@ for col in cont_feat_cols:
     n_before = ((X_train[col] < lower) | (X_train[col] > upper)).sum()
 
     X_train[col] = X_train[col].clip(lower, upper)
-    X_val[col]   = X_val[col].clip(lower, upper)
+    # X_val[col]   = X_val[col].clip(lower, upper)
     X_test[col]  = X_test[col].clip(lower, upper)
 
     print(f"  {col:45s}  bounds=[{lower:10.2f}, {upper:10.2f}]  clipped={n_before}")
@@ -344,7 +344,7 @@ for col in cont_feat_cols:
 
 for col in NO_IQR_COLS:
     X_train[col] = np.log1p(X_train[col])
-    X_val[col]   = np.log1p(X_val[col])
+    # X_val[col]   = np.log1p(X_val[col])
     X_test[col]  = np.log1p(X_test[col])
 
     print(f"  🔄 Log transformed {col}")
@@ -407,7 +407,7 @@ print("="*60)
 X_train_precap = X_train.copy()  # for before/after comparison plots
 scaler = StandardScaler()
 X_train[cont_feat_cols] = scaler.fit_transform(X_train[cont_feat_cols])
-X_val[cont_feat_cols]   = scaler.transform(X_val[cont_feat_cols])
+# X_val[cont_feat_cols]   = scaler.transform(X_val[cont_feat_cols])
 X_test[cont_feat_cols]  = scaler.transform(X_test[cont_feat_cols])
 
 print(f"\nScaled {len(cont_feat_cols)} continuous columns.")
@@ -482,18 +482,18 @@ os.makedirs('./data/processed', exist_ok=True)
 train_df = X_train.copy()
 train_df['target_log'] = y_train.values
 
-val_df = X_val.copy()
-val_df['target_log'] = y_val.values
+# val_df = X_val.copy()
+# val_df['target_log'] = y_val.values
 
 test_df = X_test.copy()
 test_df['target_log'] = y_test.values
 
 train_df.to_csv('./data/processed/train.csv', index=False)
-val_df.to_csv('./data/processed/val.csv', index=False)
+# val_df.to_csv('./data/processed/val.csv', index=False)
 test_df.to_csv('./data/processed/test.csv', index=False)
 
 print(f"  Saved: ./data/processed/train.csv  → shape {train_df.shape}")
-print(f"  Saved: ./data/processed/val.csv    → shape {val_df.shape}")
+# print(f"  Saved: ./data/processed/val.csv    → shape {val_df.shape}")
 print(f"  Saved: ./data/processed/test.csv   → shape {test_df.shape}")
 
 # ─────────────────────────────────────────────────────────────────
@@ -503,7 +503,7 @@ print("\n" + "="*60)
 print("FINAL DATASET SHAPES")
 print("="*60)
 print(f"X_train : {X_train.shape}")
-print(f"X_val   : {X_val.shape}")
+# print(f"X_val   : {X_val.shape}")
 print(f"X_test  : {X_test.shape}")
 print(f"\nContinuous cols scaled   : {len(cont_feat_cols)}")
 print(f"Binary/flag cols intact  : {len(binary_present)}")
