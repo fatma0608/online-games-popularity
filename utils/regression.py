@@ -243,7 +243,7 @@ def evaluate(name, model, X_tr, y_tr, X_te, y_te):
         return dict(
             rmse      = np.sqrt(mean_squared_error(y_true, y_pred)),
             mae       = mean_absolute_error(y_true, y_pred),
-            r2        = r2_score(y_true, y_pred),
+            r2        = r2_score(np.expm1(y_true), np.expm1(y_pred)),
             rmse_orig = np.sqrt(mean_squared_error(np.expm1(y_true), np.expm1(y_pred))),
             mae_orig  = mean_absolute_error(np.expm1(y_true), np.expm1(y_pred)),
         )
@@ -368,7 +368,7 @@ joblib.dump(best_gb, './models/gradient_boosting_tuned.pkl')
 
 
 # COMPARISON TABLE
-all_results = [ridge_res, dt_res, rf_res, gb_res, lgbm_res]
+all_results = [ridge_res, dt_res, rf_res, gb_res]
 
 print("\n" + "=" * 90)
 print("FINAL MODEL COMPARISON — TEST SET")
