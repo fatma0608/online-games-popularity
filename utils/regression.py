@@ -13,7 +13,7 @@ print("=" * 60)
 print("STEP 1: Loading and Merging Numerical + NLP Features")
 print("=" * 60)
 
-TARGET = 'target_log'
+TARGET = 'RecommendationCount'
 
 train_num = pd.read_csv('./data/processed/train.csv')
 test_num  = pd.read_csv('./data/processed/test.csv')
@@ -244,8 +244,8 @@ def evaluate(name, model, X_tr, y_tr, X_te, y_te):
             rmse      = np.sqrt(mean_squared_error(y_true, y_pred)),
             mae       = mean_absolute_error(y_true, y_pred),
             r2        = r2_score(y_true, y_pred),
-            rmse_orig = np.sqrt(mean_squared_error(np.expm1(y_true), np.expm1(y_pred))),
-            mae_orig  = mean_absolute_error(np.expm1(y_true), np.expm1(y_pred)),
+            rmse_orig = np.sqrt(mean_squared_error(y_true, y_pred)),
+            mae_orig  = mean_absolute_error(y_true, y_pred),
         )
 
     train_m = _metrics(y_tr,  pred_train)
@@ -368,7 +368,7 @@ joblib.dump(best_gb, './models/gradient_boosting_tuned.pkl')
 
 
 # COMPARISON TABLE
-all_results = [ridge_res, dt_res, rf_res, gb_res, lgbm_res]
+all_results = [ridge_res, dt_res, rf_res, gb_res]
 
 print("\n" + "=" * 90)
 print("FINAL MODEL COMPARISON — TEST SET")
@@ -389,10 +389,9 @@ print(f"\n  Best model : {best_model_info['name']}  "
 
 
 # VISUALIZATIONS
-model_names  = ['Ridge', 'DecTree', 'RandForest', 'GradBoost']
-model_colors = [
-    COLORS['ridge'], COLORS['dt'], COLORS['rf'], COLORS['gb'], COLORS['lgbm'],
-]
+model_names = ['Ridge', 'DecTree', 'RandForest', 'GradBoost']
+model_colors = [COLORS['ridge'], COLORS['dt'], COLORS['rf'], COLORS['gb']]
+
 model_preds = [r['pred_test'] for r in all_results]
 
 #  Plot 1: Actual vs Predicted 
@@ -481,7 +480,7 @@ print("Saved: ./plots/model_residual_distribution.png")
 # Plot 4: Model comparison bar chart 
 metrics_to_plot = ['r2', 'rmse', 'mae']
 metric_labels   = ['R² (higher = better)', 'RMSE log (lower = better)', 'MAE log (lower = better)']
-names_short     = ['Ridge', 'DTree', 'RF', 'GB', 'LGBM']
+names_short = ['Ridge', 'DTree', 'RF', 'GB']
 
 fig, axes = plt.subplots(1, 3, figsize=(18, 6), facecolor='#F8F7F4')
 fig.suptitle("Model Comparison — Test Set Metrics",
@@ -511,9 +510,9 @@ print("Saved: ./plots/model_comparison_metrics.png")
 #  Plot 5: Feature importance (tree-based) 
 tree_models = [best_rf, best_gb]
 tree_names  = ['Random Forest', 'Gradient Boosting']
-tree_colors = [COLORS['rf'], COLORS['gb'], COLORS['lgbm']]
+tree_colors = [COLORS['rf'], COLORS['gb']]
 
-fig, axes = plt.subplots(1, 3, figsize=(21, 7), facecolor='#F8F7F4')
+fig, axes = plt.subplots(1, 2, figsize=(14, 7), facecolor='#F8F7F4')
 fig.suptitle("Feature Importance — Top 25 Features",
              fontsize=13, fontweight='600', color='#2C2C2A', y=1.01)
 

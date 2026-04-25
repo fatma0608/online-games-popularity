@@ -4,13 +4,13 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import IsolationForest
+from sklearn.feature_selection import mutual_info_regression
 import os
 import warnings
 warnings.filterwarnings('ignore')
 
-# ─────────────────────────────────────────────
 # LOAD DATA
-# ─────────────────────────────────────────────
 df = pd.read_csv('./data/raw/train_data.csv')
 print(df.head())
 
@@ -80,11 +80,9 @@ steamspy_cols = [
 for c in steamspy_cols:
     df[f'{c}_log'] = np.log1p(df[c])
 
-df['target_log'] = np.log1p(df['RecommendationCount'])
+#df['target_log'] = np.log1p(df['RecommendationCount'])
 
-# ─────────────────────────────────────────────
 # DROP ALL TEXT / STRING COLUMNS (no text features)
-# ─────────────────────────────────────────────
 drop_text_cols = [
     'QueryName', 'ResponseName', 'Website', 'SupportEmail', 'SupportURL',
     'LegalNotice', 'Reviews', 'SupportedLanguages', 'ShortDescrip',
@@ -104,9 +102,7 @@ if remaining_text:
 
 print(f"\nColumns after dropping text features: {df.columns.tolist()}")
 
-# ─────────────────────────────────────────────
 # DEFINE BINARY / CATEGORICAL FLAGS
-# ─────────────────────────────────────────────
 BINARY_PATTERNS = [
     'IsFree', 'FreeVerAvail', 'PurchaseAvail', 'SubscriptionAvail',
     'ControllerSupport',
@@ -164,11 +160,10 @@ CONTINUOUS_COLS += [
 ]
 
 CONTINUOUS_COLS = [c for c in CONTINUOUS_COLS if c in df.columns]
-# ─────────────────────────────────────────────
+
 # TRAIN / VAL / TEST SPLIT
-# ─────────────────────────────────────────────
-X = df.drop(columns=['RecommendationCount', 'target_log'])
-y = df['target_log']
+X = df.drop(columns=['RecommendationCount'])
+y = df['RecommendationCount']
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42)
 # X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.1765, random_state=42)
@@ -185,9 +180,8 @@ print("\nRemaining NaNs after median fill:",
       X_test.isnull().sum().sum())
 
 cont_feat_cols = [c for c in CONTINUOUS_COLS if c in X_train.columns]
-# ─────────────────────────────────────────────────────────────────
+
 # HELPER: grid of before/after histograms
-# ─────────────────────────────────────────────────────────────────
 PLOT_COLS_SAMPLE = [
     'Metacritic', 'MovieCount',
     'SteamSpyOwners', 'AchievementCount', 'PriceInitial',
@@ -296,9 +290,7 @@ def plot_boxplots(before_df, after_df, cols, title, filename):
 
 
 
-# ─────────────────────────────────────────────
 # STEP 1 — OUTLIER CAPPING via IQR
-# ─────────────────────────────────────────────
 # RequiredAge,DemoCount,DeveloperCount,DLCCountPackageCount,PublisherCount
 NO_IQR_COLS = [
     'RequiredAge',
@@ -349,7 +341,7 @@ for col in NO_IQR_COLS:
 
     print(f"  🔄 Log transformed {col}")
 
-# remove constant/low variance columns after outlier capping (if any)
+# remove constant/low variance columns after outlier capping 
 threshold = 0.001  
 
 low_var_cols = []
@@ -384,10 +376,8 @@ plot_boxplots(
     title="Outlier Capping — Box Plots: Before vs After",
     filename="./plots/outlier_boxplots.png",
 )
-# ─────────────────────────────────────────────
+
 # ISOLATION FOREST (comparison with IQR capping)
-# ─────────────────────────────────────────────
-from sklearn.ensemble import IsolationForest
 
 iso = IsolationForest(contamination=0.05, random_state=42)
 outlier_mask = iso.fit_predict(X_train[cont_feat_cols]) == 1
@@ -398,9 +388,8 @@ print(f"ISO removed  : {(~outlier_mask).sum()} rows")
 
 X_train_iso = X_train[outlier_mask].copy()
 y_train_iso = y_train[outlier_mask].copy()
-# ─────────────────────────────────────────────
+
 # STEP 2 — STANDARD SCALING
-# ─────────────────────────────────────────────
 print("\n" + "="*60)
 print("STEP 2: Standard Scaling (continuous columns only)")
 print("="*60)
@@ -437,11 +426,8 @@ plot_boxplots(
     title="Standard Scaling — Box Plots: Before vs After",
     filename="./plots/scaling_boxplots.png",
 )
-# ─────────────────────────────────────────────
-# STEP 3 — MUTUAL INFORMATION (Feature Selection)
-# ─────────────────────────────────────────────
-from sklearn.feature_selection import mutual_info_regression
 
+# STEP 3 — MUTUAL INFORMATION (Feature Selection)
 mi_scores = mutual_info_regression(X_train, y_train, random_state=42)
 mi_df = pd.DataFrame({
     'feature': X_train.columns,
@@ -469,9 +455,8 @@ print("Saved: ./plots/mutual_information.png")
 
 TOP_FEATURES = mi_df.head(5)['feature'].tolist()
 print("\nTop 5 for Polynomial Features:", TOP_FEATURES)
-# ─────────────────────────────────────────────────────────────────
+
 # SAVE PROCESSED DATA
-# ─────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
 print("SAVING PROCESSED DATA")
 print("="*60)
@@ -480,13 +465,13 @@ os.makedirs('./data/processed', exist_ok=True)
 
 # Combine X and y back together for saving
 train_df = X_train.copy()
-train_df['target_log'] = y_train.values
+train_df['RecommendationCount'] = y_train.values
 
 # val_df = X_val.copy()
 # val_df['target_log'] = y_val.values
 
 test_df = X_test.copy()
-test_df['target_log'] = y_test.values
+test_df['RecommendationCount']  = y_test.values
 
 train_df.to_csv('./data/processed/train.csv', index=False)
 # val_df.to_csv('./data/processed/val.csv', index=False)
@@ -496,9 +481,8 @@ print(f"  Saved: ./data/processed/train.csv  → shape {train_df.shape}")
 # print(f"  Saved: ./data/processed/val.csv    → shape {val_df.shape}")
 print(f"  Saved: ./data/processed/test.csv   → shape {test_df.shape}")
 
-# ─────────────────────────────────────────────────────────────────
+
 # FINAL SUMMARY
-# ─────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
 print("FINAL DATASET SHAPES")
 print("="*60)
