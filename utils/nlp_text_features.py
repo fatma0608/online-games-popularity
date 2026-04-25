@@ -361,7 +361,7 @@ print("Saved: plot_nlp_06_lsa_train_vs_test.png")
 # ── Plot 7: Top LSA features correlated with target ───────────────
 if 'RecommendationCount' in df.columns:
     target_s = pd.Series(
-        np.log1p(df['RecommendationCount'].iloc[idx_train]).values,
+        (df['RecommendationCount'].iloc[idx_train]).values,
         index=nlp_train.index
     )
     corrs = nlp_train.corrwith(target_s).abs().sort_values(ascending=False)
@@ -378,7 +378,7 @@ if 'RecommendationCount' in df.columns:
     ax.barh(range(len(top20)), top20.values[::-1], color=bar_colors, alpha=0.85, height=0.75)
     ax.set_yticks(range(len(top20)))
     ax.set_yticklabels(top20.index[::-1], fontsize=8)
-    ax.set_xlabel('|Pearson correlation| with log(RecommendationCount)', fontsize=9)
+    ax.set_xlabel('|Pearson correlation| with RecommendationCount', fontsize=9)
     ax.set_title('Top 20 LSA Features by Correlation with Target\n(colour = field)',
                  fontsize=10, fontweight='500', color='#2C2C2A')
     ax.tick_params(labelsize=8)
