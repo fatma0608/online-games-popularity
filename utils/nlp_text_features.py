@@ -7,16 +7,13 @@ import warnings
 import joblib
 warnings.filterwarnings('ignore')
 
-# NLP libraries
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
-from sklearn.model_selection import train_test_split
 
-# Download required NLTK data
 for pkg in ['punkt', 'stopwords', 'wordnet', 'averaged_perceptron_tagger',
             'omw-1.4', 'punkt_tab']:
     try:
@@ -59,6 +56,29 @@ text_df = df[list(TEXT_COLS.values())].copy()
 text_df.index = df.index
 
 # ─────────────────────────────────────────────────────────────────
+# LOAD SPLIT INDICES FROM PREPROCESS.PY
+# preprocess.py saved these after its train_test_split so we use
+# the exact same rows — no second split here.
+# ─────────────────────────────────────────────────────────────────
+idx_train_path = './data/processed/idx_train.npy'
+idx_test_path  = './data/processed/idx_test.npy'
+
+if not os.path.exists(idx_train_path) or not os.path.exists(idx_test_path):
+    raise FileNotFoundError(
+        "idx_train.npy / idx_test.npy not found.\n"
+        "Run preprocess.py first — it saves these files so nlp.py "
+        "uses the exact same train/test split."
+    )
+
+idx_train = np.load(idx_train_path)
+idx_test  = np.load(idx_test_path)
+
+print(f"\n  Loaded split indices: train={len(idx_train)}, test={len(idx_test)}")
+print(f"  Total rows in df   : {len(df)}")
+assert len(idx_train) + len(idx_test) == len(df), \
+    "Index files don't cover all rows — re-run preprocess.py."
+
+# ─────────────────────────────────────────────────────────────────
 # STEP 1 — RAW TEXT STATISTICS + SPARSITY CHECK
 # ─────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
@@ -90,7 +110,6 @@ for key in keys_to_drop:
     col = TEXT_COLS.pop(key)
     print(f"\nDropped sparse column: {col}")
 
-# ── Plot 1: Raw word count distributions ─────────────────────────
 fig, axes = plt.subplots(1, len(TEXT_COLS), figsize=(5 * len(TEXT_COLS), 4), facecolor='#F8F7F4')
 if len(TEXT_COLS) == 1:
     axes = [axes]
@@ -148,7 +167,6 @@ for key, col in TEXT_COLS.items():
     cleaned[key] = text_df[col].apply(clean_text)
     print(f"done  (avg tokens: {cleaned[key].apply(lambda x: len(x.split())).mean():.1f})")
 
-# ── Plot 2: Word count before vs after cleaning ───────────────────
 fig, axes = plt.subplots(2, len(TEXT_COLS), figsize=(5 * len(TEXT_COLS), 7), facecolor='#F8F7F4')
 if len(TEXT_COLS) == 1:
     axes = axes.reshape(2, 1)
@@ -175,7 +193,8 @@ plt.close()
 print("Saved: plot_nlp_02_cleaning_before_after.png")
 
 # ─────────────────────────────────────────────────────────────────
-# STEP 3 — TF-IDF + LSA PER FIELD (15 components each)
+# STEP 3 — TF-IDF + LSA PER FIELD
+# Uses idx_train / idx_test loaded from preprocess.py — same split.
 # ─────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
 print("STEP 3: TF-IDF + LSA per Field (15 components each)")
@@ -198,28 +217,23 @@ TFIDF_CONFIG = {k: v for k, v in TFIDF_CONFIG.items() if k in cleaned}
 
 N_COMPONENTS = 15
 
-idx = np.arange(len(df))
-idx_train, idx_test = train_test_split(idx, test_size=0.15, random_state=42)
-
 tfidf_vectorizers = {}
 svd_models        = {}
-tfidf_train_mats  = {}   # store fitted train matrices for plots
+tfidf_train_mats  = {}
 lsa_train_parts   = []
 lsa_test_parts    = []
 
 for key, cfg in TFIDF_CONFIG.items():
-    texts       = cleaned[key].values
-    train_texts = texts[idx_train]
+    texts       = cleaned[key].values          # indexed same as df
+    train_texts = texts[idx_train]             # same rows preprocess used
     test_texts  = texts[idx_test]
 
-    # TF-IDF
     vec  = TfidfVectorizer(**cfg)
     X_tr = vec.fit_transform(train_texts)
     X_te = vec.transform(test_texts)
     tfidf_vectorizers[key] = vec
-    tfidf_train_mats[key]  = X_tr          # keep for plotting
+    tfidf_train_mats[key]  = X_tr
 
-    # LSA (TruncatedSVD)
     svd_field = TruncatedSVD(n_components=N_COMPONENTS, random_state=42)
     lsa_tr    = svd_field.fit_transform(X_tr)
     lsa_te    = svd_field.transform(X_te)
@@ -237,10 +251,9 @@ for key, cfg in TFIDF_CONFIG.items():
     lsa_train_parts.append(pd.DataFrame(lsa_tr, columns=col_names))
     lsa_test_parts.append(pd.DataFrame(lsa_te,  columns=col_names))
 
+# Stack all fields — row order matches preprocess train/test CSVs exactly
 nlp_train = pd.concat(lsa_train_parts, axis=1)
 nlp_test  = pd.concat(lsa_test_parts,  axis=1)
-nlp_train.index = idx_train
-nlp_test.index  = idx_test
 
 print(f"\n  Total LSA features : {len(TFIDF_CONFIG)} fields × {N_COMPONENTS} = {nlp_train.shape[1]}")
 print(f"  Train shape        : {nlp_train.shape}")
@@ -278,7 +291,7 @@ if len(TFIDF_CONFIG) == 1:
 for i, key in enumerate(TFIDF_CONFIG):
     ax          = axes[i]
     ax.set_facecolor('#F0EFE8')
-    mat         = tfidf_train_mats[key]          # already fitted train matrix
+    mat         = tfidf_train_mats[key]
     vocab       = tfidf_vectorizers[key].get_feature_names_out()
     mean_scores = np.asarray(mat.mean(axis=0)).flatten()
     top40_idx   = mean_scores.argsort()[-40:][::-1]
@@ -294,19 +307,16 @@ plt.savefig('./plot_nlp_04_tfidf_top_terms.png', dpi=130, bbox_inches='tight', f
 plt.close()
 print("Saved: plot_nlp_04_tfidf_top_terms.png")
 
-# ── Plot 5: Top LSA component words per field (first 4 fields) ────
-# Shows which words drive each field's LSA dimensions
+# ── Plot 5: Top LSA component words per field ────────────────────
 n_fields_plot = min(4, len(TFIDF_CONFIG))
 fields_to_plot = list(TFIDF_CONFIG.keys())[:n_fields_plot]
-
 fig, axes = plt.subplots(n_fields_plot, 3, figsize=(15, 4 * n_fields_plot), facecolor='#F8F7F4')
 if n_fields_plot == 1:
     axes = axes.reshape(1, 3)
-
 for row, key in enumerate(fields_to_plot):
     vocab   = tfidf_vectorizers[key].get_feature_names_out()
     svd_f   = svd_models[key]
-    for comp_i in range(3):           # show first 3 components per field
+    for comp_i in range(3):
         ax      = axes[row][comp_i]
         ax.set_facecolor('#F0EFE8')
         loading = svd_f.components_[comp_i]
@@ -323,7 +333,6 @@ for row, key in enumerate(fields_to_plot):
                      fontsize=8.5, fontweight='500', color='#2C2C2A')
         ax.axvline(0, color='#2C2C2A', linewidth=0.8)
         ax.tick_params(axis='x', labelsize=7)
-
 plt.suptitle("Top Words per LSA Component per Field (red=positive, blue=negative)",
              fontsize=12, fontweight='600', color='#2C2C2A', y=1.01)
 plt.tight_layout()
@@ -332,11 +341,10 @@ plt.close()
 print("Saved: plot_nlp_05_lsa_components_per_field.png")
 
 # ── Plot 6: LSA feature distributions train vs test ───────────────
-# First 2 components from each field
 sample_cols = []
 for key in TFIDF_CONFIG:
     sample_cols += [f'lsa_{key}_0', f'lsa_{key}_1']
-sample_cols = sample_cols[:10]   # cap at 10 for readability
+sample_cols = sample_cols[:10]
 
 fig, axes = plt.subplots(2, 5, figsize=(18, 6), facecolor='#F8F7F4')
 axes = axes.flatten()
@@ -361,15 +369,13 @@ print("Saved: plot_nlp_06_lsa_train_vs_test.png")
 # ── Plot 7: Top LSA features correlated with target ───────────────
 if 'RecommendationCount' in df.columns:
     target_s = pd.Series(
-        (df['RecommendationCount'].iloc[idx_train]).values,
-        index=nlp_train.index
+        df['RecommendationCount'].iloc[idx_train].values,
+        index=range(len(idx_train))
     )
     corrs = nlp_train.corrwith(target_s).abs().sort_values(ascending=False)
     top20 = corrs.head(20)
-
     fig, ax = plt.subplots(figsize=(9, 5), facecolor='#F8F7F4')
     ax.set_facecolor('#F0EFE8')
-    # Color bars by field
     bar_colors = []
     for c in top20.index[::-1]:
         field = c.replace('lsa_', '').rsplit('_', 1)[0]
@@ -389,6 +395,8 @@ if 'RecommendationCount' in df.columns:
 
 # ─────────────────────────────────────────────────────────────────
 # SAVE
+# Row order of nlp_train matches train.csv row order exactly because
+# both use idx_train from preprocess.py.  Same for nlp_test / test.csv.
 # ─────────────────────────────────────────────────────────────────
 nlp_train.to_csv('./data/processed/nlp_features_train.csv', index=False)
 nlp_test.to_csv('./data/processed/nlp_features_test.csv',   index=False)
@@ -404,39 +412,5 @@ print(f"  Fields used      : {list(TFIDF_CONFIG.keys())}")
 print(f"  Fields dropped   : {keys_to_drop}")
 print(f"  Components/field : {N_COMPONENTS}")
 print(f"  Total features   : {nlp_train.shape[1]}")
-print(f"  Train shape      : {nlp_train.shape}")
-print(f"  Test shape       : {nlp_test.shape}")
-print()
-print("PLOTS:")
-for fname in [
-    "plot_nlp_01_raw_word_counts.png          — raw word count distributions",
-    "plot_nlp_02_cleaning_before_after.png    — word count before vs after cleaning",
-    "plot_nlp_03_lsa_variance_per_field.png   — LSA variance explained per field",
-    "plot_nlp_04_tfidf_top_terms.png          — top TF-IDF terms per field",
-    "plot_nlp_05_lsa_components_per_field.png — top words per LSA component per field",
-    "plot_nlp_06_lsa_train_vs_test.png        — LSA feature distributions train vs test",
-    "plot_nlp_07_lsa_feature_correlations.png — top LSA features correlated with target",
-]:
-    print(f"  {fname}")
-
-# ── Prediction helper ─────────────────────────────────────────────
-#
-# def predict_from_text(text_inputs: dict, model):
-#     """
-#     text_inputs = {'about': '...', 'reviews': '...', ...}
-#     Missing keys are treated as empty string.
-#     """
-#     tfidf_vectorizers = joblib.load('./models/tfidf_vectorizers.pkl')
-#     svd_models        = joblib.load('./models/svd_models.pkl')
-#     parts = []
-#     for key in tfidf_vectorizers:
-#         raw          = text_inputs.get(key, '')
-#         cleaned_text = clean_text(raw)
-#         tfidf_vec    = tfidf_vectorizers[key].transform([cleaned_text])
-#         lsa_vec      = svd_models[key].transform(tfidf_vec)
-#         lsa_vec      = safe_normalize(lsa_vec)
-#         col_names    = [f'lsa_{key}_{j}' for j in range(lsa_vec.shape[1])]
-#         parts.append(pd.DataFrame(lsa_vec, columns=col_names))
-#     nlp_features = pd.concat(parts, axis=1)
-#     # combine with your numeric features then:
-#     # return model.predict(final_features)
+print(f"  Train shape      : {nlp_train.shape}  ← row-aligned with train.csv")
+print(f"  Test shape       : {nlp_test.shape}   ← row-aligned with test.csv")
