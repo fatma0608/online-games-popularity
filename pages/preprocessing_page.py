@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import re, os, warnings
+import re, os, warnings, joblib
 warnings.filterwarnings('ignore')
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -10,8 +10,6 @@ from sklearn.ensemble import IsolationForest
 from sklearn.feature_selection import mutual_info_regression
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
-from sklearn.preprocessing import normalize
-import scipy.sparse as sp
 
 st.set_page_config(page_title="Preprocessing · SteamML", page_icon="⚙️", layout="wide")
 
@@ -98,6 +96,11 @@ def render_log(lines):
         for m, k in lines
     )
     st.markdown(f'<div class="log-box">{html}</div>', unsafe_allow_html=True)
+
+def safe_normalize(X):
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    return X / norms
 
 # ═══════════════════════════════════════════════════════
 # TAB 1  ── PREPROCESSING
@@ -213,13 +216,13 @@ with tab_pre:
 
             X = df.drop(columns=['RecommendationCount', 'target_log'])
             y = df['target_log']
-            Xt, X_test, yt, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
-            X_train, X_val, y_train, y_val = train_test_split(Xt, yt, test_size=0.1765, random_state=42)
-            L(f"  split → train={len(X_train):,}  val={len(X_val):,}  test={len(X_test):,}")
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
+            # X_train, X_val, y_train, y_val = train_test_split(Xt, yt, test_size=0.1765, random_state=42)
+            # L(f"  split → train={len(X_train):,}  val={len(X_val):,}  test={len(X_test):,}")
 
             num_cols = X_train.select_dtypes(include=np.number).columns
             med = X_train[num_cols].median()
-            for s in [X_train, X_val, X_test]:
+            for s in [X_train , X_test]:
                 s[num_cols] = s[num_cols].fillna(med)
             L(f"  median fill done — NaNs left: {X_train.isnull().sum().sum()}")
 
@@ -229,7 +232,7 @@ with tab_pre:
             total_clip = 0
             for col in cont_feat_cols:
                 if col in NO_IQR:
-                    for s in [X_train, X_val, X_test]:
+                    for s in [X_train, X_test]:
                         s[col] = np.log1p(s[col])
                     continue
                 Q1, Q3 = X_train[col].quantile(0.25), X_train[col].quantile(0.75)
@@ -238,7 +241,7 @@ with tab_pre:
                     continue
                 lo, hi = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
                 total_clip += ((X_train[col] < lo) | (X_train[col] > hi)).sum()
-                for s in [X_train, X_val, X_test]:
+                for s in [X_train, X_test]:
                     s[col] = s[col].clip(lo, hi)
             L(f"  IQR capping — {total_clip:,} values clipped")
 
@@ -249,7 +252,7 @@ with tab_pre:
             X_train_precap = X_train.copy()
             scaler = StandardScaler()
             X_train[cont_feat_cols] = scaler.fit_transform(X_train[cont_feat_cols])
-            X_val[cont_feat_cols]   = scaler.transform(X_val[cont_feat_cols])
+            # X_val[cont_feat_cols]   = scaler.transform(X_val[cont_feat_cols])
             X_test[cont_feat_cols]  = scaler.transform(X_test[cont_feat_cols])
             L(f"  StandardScaler applied to {len(cont_feat_cols)} cols")
 
@@ -264,16 +267,16 @@ with tab_pre:
             os.makedirs('./data/processed', exist_ok=True)
             os.makedirs('./plots', exist_ok=True)
             tr_out = X_train.copy(); tr_out['target_log'] = y_train.values
-            v_out  = X_val.copy();   v_out['target_log']  = y_val.values
+            # v_out  = X_val.copy();   v_out['target_log']  = y_val.values
             te_out = X_test.copy();  te_out['target_log'] = y_test.values
-            tr_out.to_csv('./data/processed/train.csv', index=False)
-            v_out.to_csv('./data/processed/val.csv',    index=False)
-            te_out.to_csv('./data/processed/test.csv',  index=False)
+            # tr_out.to_csv('./data/processed/train.csv', index=False)
+            # # v_out.to_csv('./data/processed/val.csv',    index=False)
+            # te_out.to_csv('./data/processed/test.csv',  index=False)
 
             L("// Done ✓ ─────────────────────────────────")
             st.session_state.update({
-                "done": True, "X_train": X_train, "X_val": X_val, "X_test": X_test,
-                "y_train": y_train, "y_val": y_val, "y_test": y_test,
+                "done": True, "X_train": X_train,  "X_test": X_test,
+                "y_train": y_train, "y_test": y_test,
                 "X_train_raw": X_train_raw, "cont_cols": cont_feat_cols,
                 "corr_s": corr_s, "mi_df": mi_df,
                 "iso_kept": mask.sum(), "iso_removed": (~mask).sum(),
@@ -294,10 +297,10 @@ with tab_pre:
 
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Train rows",      f"{len(X_train):,}")
-        c2.metric("Features",        X_train.shape[1])
-        c3.metric("ISO kept",        f"{st.session_state['iso_kept']:,}")
-        c4.metric("ISO removed",     f"{st.session_state['iso_removed']:,}")
+        c1.metric("Train rows",  f"{len(X_train):,}")
+        c2.metric("Features",    X_train.shape[1])
+        c3.metric("ISO kept",    f"{st.session_state['iso_kept']:,}")
+        c4.metric("ISO removed", f"{st.session_state['iso_removed']:,}")
 
         sec("Target Distribution (log-space)", "#5b8df6")
         fig, axs = dark_fig(1, 2, (13, 4))
@@ -371,8 +374,9 @@ with tab_pre:
             desc.index = desc.index.astype(str)
             st.dataframe(desc, use_container_width=True, height=280)
 
+
 # ═══════════════════════════════════════════════════════
-# TAB 2  ── NLP
+# TAB 2  ── NLP  (per-field TF-IDF + SVD, matching predict_page)
 # ═══════════════════════════════════════════════════════
 with tab_nlp:
     cl2, cr2 = st.columns([1, 1], gap="large")
@@ -385,9 +389,10 @@ with tab_nlp:
     with cr2:
         st.markdown("""<div style='background:#13161e;border:1px solid #252a38;border-radius:10px;
             padding:16px 18px;font-size:12px;color:#6b7280;line-height:1.9'>
-            Raw text stats → Clean (HTML/URL/stopwords/lemmatize) →
-            TF-IDF per field (5 fields) → LSA / TruncatedSVD (50 components) →
-            NLP-target correlation → Save nlp_features CSVs
+            Raw text stats → Sparsity filter (>50% empty dropped) →
+            Clean (HTML/URL/stopwords/lemmatize) → TF-IDF <b>per field</b> →
+            LSA / TruncatedSVD <b>15 components per field</b> → L2-normalize →
+            Save nlp_features CSVs + <code>tfidf_vectorizers.pkl</code> + <code>svd_models.pkl</code>
         </div>""", unsafe_allow_html=True)
 
     if run2:
@@ -405,35 +410,49 @@ with tab_nlp:
         try:
             L2("// NLP Pipeline started ─────────────────")
             df2 = pd.read_csv(RAW_PATH)
-            TC = {
-                'about':   'AboutText',
-                'short':   'ShortDescrip',
-                'detail':  'DetailedDescrip',
-                'reviews': 'Reviews',
-                'name':    'ResponseName',
+
+            # ── Field config (matches predict_page NLP_FIELD_MAP + TFIDF_CONFIG) ──
+            TC_RAW = {
+                'about'          : 'AboutText',
+                'short'          : 'ShortDescrip',
+                'detail'         : 'DetailedDescrip',
+                'reviews'        : 'Reviews',
+                'name'           : 'ResponseName',
+                'PCMinReqsText'  : 'PCMinReqsText',
+                'PCRecReqsText'  : 'PCRecReqsText',
+                'LinuxMinReqsText': 'LinuxMinReqsText',
+                'MacMinReqsText' : 'MacMinReqsText',
             }
-            TC = {k: v for k, v in TC.items() if v in df2.columns}
+            # keep only columns that exist in the CSV
+            TC = {k: v for k, v in TC_RAW.items() if v in df2.columns}
             for col in TC.values():
                 df2[col] = df2[col].fillna('')
-            text_df = df2[list(TC.values())].copy()
-            L2(f"  text cols: {list(TC.values())}")
+            L2(f"  text cols found: {list(TC.values())}")
 
+            # ── Step 1: raw stats + sparsity filter ───────────────────────────
+            SPARSITY_THRESH = 0.5
             raw_stats = {}
+            keys_to_drop = []
             for key, col in TC.items():
-                vals = text_df[col]
+                vals = df2[col]
+                empty_ratio = (vals.str.len() <= 10).mean()
                 raw_stats[key] = {
-                    'wc':  vals.apply(lambda x: len(x.split())),
-                    'has': (vals.str.len() > 10).sum(),
+                    'wc'         : vals.apply(lambda x: len(x.split())),
+                    'has_content': (vals.str.len() > 10).sum(),
+                    'empty_ratio': empty_ratio,
                 }
-            L2(f"  raw stats — AboutText avg words: {raw_stats.get('about', {}).get('wc', pd.Series([0])).mean():.0f}")
+                L2(f"  [{col}]  non-empty={raw_stats[key]['has_content']:,}  "
+                   f"empty={empty_ratio:.1%}  avg_words={raw_stats[key]['wc'].mean():.0f}", "muted")
+                if empty_ratio > SPARSITY_THRESH:
+                    keys_to_drop.append(key)
+                    L2(f"    → dropping (>{SPARSITY_THRESH:.0%} empty)", "muted")
+            for key in keys_to_drop:
+                TC.pop(key)
+            L2(f"  kept fields after sparsity filter: {list(TC.keys())}")
 
+            # ── Step 2: text cleaning ─────────────────────────────────────────
             lemmatizer = WordNetLemmatizer()
             STOP = set(stopwords.words('english'))
-            STOP.update({
-                'game', 'games', 'play', 'player', 'players', 'feature', 'features',
-                'include', 'includes', 'new', 'get', 'also', 'available', 'download',
-                'update', 'version', 'support', 'use', 'using', 'system', 'may', 'will', 'can',
-            })
             HR = re.compile(r'<[^>]+>')
             UR = re.compile(r'http\S+|www\.\S+')
             PR = re.compile(r'[^a-zA-Z\s]')
@@ -445,89 +464,117 @@ with tab_nlp:
                 t = t.lower()
                 t = PR.sub(' ', t)
                 t = SR.sub(' ', t).strip()
-                return ' '.join([lemmatizer.lemmatize(w) for w in t.split() if w not in STOP and len(w) > 2])
+                return ' '.join([lemmatizer.lemmatize(w) for w in t.split()
+                                 if w not in STOP and len(w) > 2])
 
             cleaned = {}
             for key, col in TC.items():
-                cleaned[key] = text_df[col].apply(clean)
+                cleaned[key] = df2[col].apply(clean)
                 avg = cleaned[key].apply(lambda x: len(x.split())).mean()
-                L2(f"  cleaned {col} — avg tokens: {avg:.0f}", "muted")
+                L2(f"  cleaned [{key}] — avg tokens: {avg:.0f}", "muted")
 
-            CFG = {
-                'about':   dict(max_features=200, ngram_range=(1, 2), min_df=3, max_df=0.95, sublinear_tf=True),
-                'detail':  dict(max_features=300, ngram_range=(1, 2), min_df=3, max_df=0.95, sublinear_tf=True),
-                'short':   dict(max_features=100, ngram_range=(1, 2), min_df=3, max_df=0.95, sublinear_tf=True),
-                'reviews': dict(max_features=100, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),
-                'name':    dict(max_features=50,  ngram_range=(1, 1), min_df=2, max_df=0.90, sublinear_tf=True),
+            # ── Step 3: per-field TF-IDF config ──────────────────────────────
+            TFIDF_CFG = {
+                'about'          : dict(max_features=500, ngram_range=(1,2), min_df=3, max_df=0.95, sublinear_tf=True),
+                'detail'         : dict(max_features=500, ngram_range=(1,2), min_df=3, max_df=0.95, sublinear_tf=True),
+                'short'          : dict(max_features=300, ngram_range=(1,2), min_df=3, max_df=0.95, sublinear_tf=True),
+                'reviews'        : dict(max_features=300, ngram_range=(1,2), min_df=2, max_df=0.95, sublinear_tf=True),
+                'name'           : dict(max_features=100, ngram_range=(1,1), min_df=2, max_df=0.90, sublinear_tf=True),
+                'PCMinReqsText'  : dict(max_features=200, ngram_range=(1,2), min_df=2, max_df=0.95, sublinear_tf=True),
+                'PCRecReqsText'  : dict(max_features=200, ngram_range=(1,2), min_df=2, max_df=0.95, sublinear_tf=True),
+                'LinuxMinReqsText': dict(max_features=100, ngram_range=(1,2), min_df=2, max_df=0.95, sublinear_tf=True),
+                'MacMinReqsText' : dict(max_features=100, ngram_range=(1,2), min_df=2, max_df=0.95, sublinear_tf=True),
             }
-            CFG = {k: v for k, v in CFG.items() if k in cleaned}
+            # only keep configs for fields that survived sparsity filter
+            TFIDF_CFG = {k: v for k, v in TFIDF_CFG.items() if k in cleaned}
 
+            N_COMPONENTS = 15
+
+            # train/val/test split indices (same seed as numeric preprocessing)
             idx_all = np.arange(len(df2))
             idx_t2, idx_te = train_test_split(idx_all, test_size=0.15, random_state=42)
             idx_tr, idx_v  = train_test_split(idx_t2,  test_size=0.1765, random_state=42)
 
-            parts_tr, parts_v, parts_te, vecs, fnames_all = [], [], [], {}, []
-            for key, cfg in CFG.items():
+            tfidf_vectorizers = {}
+            svd_models        = {}
+            tfidf_train_mats  = {}   # for plots
+            lsa_train_parts, lsa_val_parts, lsa_test_parts = [], [], []
+
+            for key, cfg in TFIDF_CFG.items():
                 texts = cleaned[key].values
-                vec = TfidfVectorizer(**cfg)
-                tr = vec.fit_transform(texts[idx_tr])
-                v  = vec.transform(texts[idx_v])
-                te = vec.transform(texts[idx_te])
-                vecs[key] = vec
-                fnames_all.append(vec.get_feature_names_out())
-                parts_tr.append(tr)
-                parts_v.append(v)
-                parts_te.append(te)
-                L2(f"  TF-IDF [{key}] vocab={len(vec.vocabulary_):,} shape={tr.shape}", "muted")
 
-            tfidf_tr = sp.hstack(parts_tr, format='csr')
-            L2(f"  combined TF-IDF: {tfidf_tr.shape}")
+                # TF-IDF (fit on train only)
+                vec   = TfidfVectorizer(**cfg)
+                X_tr  = vec.fit_transform(texts[idx_tr])
+                X_v   = vec.transform(texts[idx_v])
+                X_te  = vec.transform(texts[idx_te])
+                tfidf_vectorizers[key] = vec
+                tfidf_train_mats[key]  = X_tr
 
-            N = 50
-            svd = TruncatedSVD(n_components=N, random_state=42)
-            lsa_tr = normalize(svd.fit_transform(tfidf_tr))
-            lsa_v  = normalize(svd.transform(sp.hstack(parts_v,  format='csr')))
-            lsa_te = normalize(svd.transform(sp.hstack(parts_te, format='csr')))
-            cum_var = svd.explained_variance_ratio_.cumsum()[-1] * 100
-            L2(f"  LSA {N} components — cum variance: {cum_var:.1f}%")
+                # LSA per field
+                svd_f  = TruncatedSVD(n_components=N_COMPONENTS, random_state=42)
+                lsa_tr = safe_normalize(svd_f.fit_transform(X_tr))
+                lsa_v  = safe_normalize(svd_f.transform(X_v))
+                lsa_te = safe_normalize(svd_f.transform(X_te))
+                svd_models[key] = svd_f
 
-            lsa_cols = [f'lsa_{i}' for i in range(N)]
-            lsa_tr_df = pd.DataFrame(lsa_tr, columns=lsa_cols, index=idx_tr)
-            lsa_v_df  = pd.DataFrame(lsa_v,  columns=lsa_cols, index=idx_v)
-            lsa_te_df = pd.DataFrame(lsa_te, columns=lsa_cols, index=idx_te)
+                explained = svd_f.explained_variance_ratio_.cumsum()[-1] * 100
+                L2(f"  [{key}] vocab={len(vec.vocabulary_):,}  "
+                   f"lsa=({X_tr.shape[0]},{N_COMPONENTS})  var={explained:.1f}%", "muted")
 
-            lsa_all   = pd.concat([lsa_tr_df, lsa_v_df, lsa_te_df]).sort_index()
-            nlp_train = lsa_all.loc[idx_tr].reset_index(drop=True)
-            nlp_val   = lsa_all.loc[idx_v].reset_index(drop=True)
-            nlp_test  = lsa_all.loc[idx_te].reset_index(drop=True)
+                col_names = [f'lsa_{key}_{j}' for j in range(N_COMPONENTS)]
+                lsa_train_parts.append(pd.DataFrame(lsa_tr, columns=col_names))
+                lsa_val_parts.append(pd.DataFrame(lsa_v,   columns=col_names))
+                lsa_test_parts.append(pd.DataFrame(lsa_te,  columns=col_names))
 
-            tgt = np.log1p(df2['RecommendationCount']).iloc[idx_tr].reset_index(drop=True)
-            corrs_nlp = nlp_train.corrwith(tgt).abs().sort_values(ascending=False)
+            # concatenate all per-field LSA blocks
+            nlp_train = pd.concat(lsa_train_parts, axis=1)
+            nlp_val   = pd.concat(lsa_val_parts,   axis=1)
+            nlp_test  = pd.concat(lsa_test_parts,  axis=1)
+            nlp_train.index = idx_tr
+            nlp_val.index   = idx_v
+            nlp_test.index  = idx_te
+
+            total_nlp_feats = nlp_train.shape[1]
+            L2(f"  total NLP features: {len(TFIDF_CFG)} fields × {N_COMPONENTS} = {total_nlp_feats}")
+
+            # correlation with target
+            tgt = np.log1p(df2['RecommendationCount'].iloc[idx_tr].values)
+            tgt_s = pd.Series(tgt, index=nlp_train.index)
+            corrs_nlp = nlp_train.corrwith(tgt_s).abs().sort_values(ascending=False)
             L2(f"  top NLP corr: {corrs_nlp.index[0]} = {corrs_nlp.iloc[0]:.4f}")
 
-            os.makedirs('./data/processed', exist_ok=True)
-            nlp_train.to_csv('./data/processed/nlp_features_train.csv', index=False)
-            nlp_val.to_csv('./data/processed/nlp_features_val.csv',     index=False)
-            nlp_test.to_csv('./data/processed/nlp_features_test.csv',   index=False)
-            L2("  saved NLP CSVs to ./data/processed/")
+            # ── Save CSVs ─────────────────────────────────────────────────────
+            # os.makedirs('./data/processed', exist_ok=True)
+            # nlp_train.reset_index(drop=True).to_csv('./data/processed/nlp_features_train.csv', index=False)
+            # nlp_val.reset_index(drop=True).to_csv('./data/processed/nlp_features_val.csv',     index=False)
+            # nlp_test.reset_index(drop=True).to_csv('./data/processed/nlp_features_test.csv',   index=False)
+            # L2("  saved NLP CSVs to ./data/processed/")
+
+            # # ── Save models (used by predict_page) ────────────────────────────
+            # os.makedirs('./models', exist_ok=True)
+            # joblib.dump(tfidf_vectorizers, './models/tfidf_vectorizers.pkl')
+            # joblib.dump(svd_models,        './models/svd_models.pkl')
+            # L2("  saved tfidf_vectorizers.pkl + svd_models.pkl to ./models/")
+
+            L2(f"  fields kept  : {list(TFIDF_CFG.keys())}")
+            L2(f"  fields dropped (sparse): {keys_to_drop}")
             L2("// NLP Done ✓ ──────────────────────────")
 
             st.session_state.update({
-                "nlp_done":   True,
-                "raw_stats":  raw_stats,
-                "cleaned":    cleaned,
-                "parts_tr":   parts_tr,
-                "vecs":       vecs,
-                "fnames_all": fnames_all,
-                "TC":         TC,
-                "CFG":        CFG,
-                "svd":        svd,
-                "nlp_train":  nlp_train,
-                "nlp_test":   nlp_test,
-                "corrs_nlp":  corrs_nlp,
-                "cum_var":    cum_var,
-                "N":          N,
-                "all_fn":     np.concatenate(fnames_all),
+                "nlp_done"        : True,
+                "raw_stats"       : raw_stats,
+                "cleaned"         : cleaned,
+                "TC"              : TC,
+                "TFIDF_CFG"       : TFIDF_CFG,
+                "tfidf_vecs"      : tfidf_vectorizers,
+                "svd_models"      : svd_models,
+                "tfidf_train_mats": tfidf_train_mats,
+                "nlp_train"       : nlp_train,
+                "nlp_test"        : nlp_test,
+                "corrs_nlp"       : corrs_nlp,
+                "N_COMPONENTS"    : N_COMPONENTS,
+                "keys_dropped"    : keys_to_drop,
             })
         except Exception as e:
             import traceback
@@ -535,34 +582,39 @@ with tab_nlp:
             L2(traceback.format_exc(), "err")
         render_log(log2)
 
+    # ── NLP visualisations ─────────────────────────────────────────────
     if st.session_state.get("nlp_done"):
-        rs    = st.session_state["raw_stats"]
-        cl_   = st.session_state["cleaned"]
-        TC    = st.session_state["TC"]
-        vecs  = st.session_state["vecs"]
-        pts   = st.session_state["parts_tr"]
-        CFG   = st.session_state["CFG"]
-        svd   = st.session_state["svd"]
-        nlp_tr = st.session_state["nlp_train"]
-        nlp_te = st.session_state["nlp_test"]
-        cn    = st.session_state["corrs_nlp"]
-        N     = st.session_state["N"]
-        afn   = st.session_state["all_fn"]
-        COLORS = ['#4C8EDA', '#E8593C', '#1D9E75', '#7F77DD', '#EF9F27']
+        rs      = st.session_state["raw_stats"]
+        cl_     = st.session_state["cleaned"]
+        TC      = st.session_state["TC"]
+        CFG     = st.session_state["TFIDF_CFG"]
+        vecs    = st.session_state["tfidf_vecs"]
+        svd_m   = st.session_state["svd_models"]
+        tmats   = st.session_state["tfidf_train_mats"]
+        nlp_tr  = st.session_state["nlp_train"]
+        nlp_te  = st.session_state["nlp_test"]
+        cn      = st.session_state["corrs_nlp"]
+        N       = st.session_state["N_COMPONENTS"]
+        COLORS  = ['#4C8EDA', '#E8593C', '#1D9E75', '#7F77DD', '#EF9F27',
+                   '#F4845F', '#56B4E9', '#CC79A7', '#D55E00']
 
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Text fields",    len(TC))
-        c2.metric("TF-IDF feats",   sum(len(vecs[k].vocabulary_) for k in vecs))
-        c3.metric("LSA components", N)
-        c4.metric("Cum. variance",  f"{st.session_state['cum_var']:.1f}%")
+        c1.metric("Fields kept",      len(TC))
+        c2.metric("Fields dropped",   len(st.session_state["keys_dropped"]))
+        c3.metric("LSA comp/field",   N)
+        c4.metric("Total NLP feats",  nlp_tr.shape[1])
 
+        # ── Raw word count distributions ─────────────────────────────────
         sec("Raw Word Count — Per Field", "#5b8df6")
-        fig, axs = dark_fig(1, len(TC), (5 * len(TC), 4))
+        n_fields = len(TC)
+        fig, axs = dark_fig(1, n_fields, (max(5 * n_fields, 8), 4))
         for i, (key, col) in enumerate(TC.items()):
             wc = rs[key]['wc']
-            axs[i].hist(wc.clip(0, wc.quantile(0.98)), bins=60, color=COLORS[i % 5], alpha=0.85, edgecolor='none')
-            axs[i].axvline(wc.mean(), color='#2C2C2A', lw=1.2, linestyle='--', label=f'mean={wc.mean():.0f}')
+            axs[i].hist(wc.clip(0, wc.quantile(0.98)), bins=60,
+                        color=COLORS[i % len(COLORS)], alpha=0.85, edgecolor='none')
+            axs[i].axvline(wc.mean(), color='#e8eaf2', lw=1.2, linestyle='--',
+                           label=f'mean={wc.mean():.0f}')
             axs[i].set_title(col, color='#e8eaf2', fontsize=8, fontfamily='monospace')
             axs[i].legend(fontsize=7, framealpha=0.4)
         plt.suptitle("Raw Text Word Counts", color='#e8eaf2', fontsize=10, fontfamily='monospace', y=1.02)
@@ -570,6 +622,7 @@ with tab_nlp:
         st.pyplot(fig, use_container_width=True)
         plt.close()
 
+        # ── Before vs after cleaning ──────────────────────────────────────
         sec("Text Cleaning — Before vs After", "#5bf6c8")
         sel_t = st.selectbox("Field", list(TC.keys()), key="txt_sel", format_func=lambda k: TC[k])
         fig, axs = dark_fig(1, 2, (13, 4))
@@ -588,67 +641,117 @@ with tab_nlp:
         st.pyplot(fig, use_container_width=True)
         plt.close()
 
+        # ── TF-IDF top terms per field ────────────────────────────────────
         sec("TF-IDF — Top Terms", "#f6c85b")
-        keys_t = list(CFG.keys())
-        sel_tf = st.selectbox("Field", keys_t, key="tfidf_sel", format_func=lambda k: TC[k])
-        kidx = keys_t.index(sel_tf)
-        mat = pts[kidx]
-        ms = np.asarray(mat.mean(axis=0)).flatten()
-        vocab = vecs[sel_tf].get_feature_names_out()
-        top40 = ms.argsort()[-40:][::-1]
+        keys_list = list(CFG.keys())
+        sel_tf = st.selectbox("Field", keys_list, key="tfidf_sel", format_func=lambda k: TC[k])
+        kidx   = keys_list.index(sel_tf)
+        mat    = tmats[sel_tf]
+        ms     = np.asarray(mat.mean(axis=0)).flatten()
+        vocab  = vecs[sel_tf].get_feature_names_out()
+        top40  = ms.argsort()[-40:][::-1]
         fig, axs = dark_fig(1, 1, (12, 6))
-        axs[0].barh(range(40), ms[top40][::-1], color=COLORS[kidx % 5], alpha=0.85, height=0.75)
+        axs[0].barh(range(40), ms[top40][::-1], color=COLORS[kidx % len(COLORS)], alpha=0.85, height=0.75)
         axs[0].set_yticks(range(40))
         axs[0].set_yticklabels(vocab[top40][::-1], fontsize=7, color='#e8eaf2')
-        axs[0].set_title(f'Top 40 TF-IDF Terms — {TC[sel_tf]}', color='#e8eaf2', fontsize=9, fontfamily='monospace')
-        plt.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-        plt.close()
-
-        sec("LSA — Explained Variance", "#7F77DD")
-        fig, axs = dark_fig(1, 2, (13, 4))
-        axs[0].plot(range(1, N + 1), svd.explained_variance_ratio_ * 100,
-                    color='#4C8EDA', lw=1.8, marker='o', markersize=3)
-        axs[0].fill_between(range(1, N + 1), svd.explained_variance_ratio_ * 100, alpha=0.2, color='#4C8EDA')
-        axs[0].set_title('Scree Plot', color='#e8eaf2', fontsize=9, fontfamily='monospace')
-        axs[0].set_xlabel('Component', fontsize=8, color='#6b7280')
-        axs[0].set_ylabel('Variance %', fontsize=8, color='#6b7280')
-        cum = svd.explained_variance_ratio_.cumsum()
-        axs[1].plot(range(1, N + 1), cum * 100, color='#E8593C', lw=1.8)
-        axs[1].fill_between(range(1, N + 1), cum * 100, alpha=0.2, color='#E8593C')
-        axs[1].axhline(80, color='#6b7280', lw=1, linestyle='--', label='80%')
-        axs[1].axhline(90, color='#444441', lw=1, linestyle='--', label='90%')
-        axs[1].legend(fontsize=8, framealpha=0.4)
-        axs[1].set_title('Cumulative Variance', color='#e8eaf2', fontsize=9, fontfamily='monospace')
-        plt.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-        plt.close()
-
-        sec("LSA — Top Words per Component", "#E8593C")
-        comp_i = st.slider("Component", 1, min(6, N), 1, key="comp_sl") - 1
-        fig, axs = dark_fig(1, 1, (12, 5))
-        loading = svd.components_[comp_i]
-        top_idx = np.concatenate([loading.argsort()[-15:][::-1], loading.argsort()[:5]])
-        tw, ts = afn[top_idx], loading[top_idx]
-        cb = ['#E8593C' if s > 0 else '#4C8EDA' for s in ts]
-        axs[0].barh(range(len(top_idx)), ts[::-1], color=cb[::-1], alpha=0.85, height=0.75)
-        axs[0].set_yticks(range(len(top_idx)))
-        axs[0].set_yticklabels(tw[::-1], fontsize=8, color='#e8eaf2')
-        axs[0].axvline(0, color='#6b7280', lw=0.8)
-        axs[0].set_title(f'LSA Component {comp_i+1}', color='#e8eaf2', fontsize=9, fontfamily='monospace')
-        plt.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-        plt.close()
-
-        sec("NLP Features — Correlation with Target", "#5bf6c8")
-        t20n = cn.head(20)
-        fig, axs = dark_fig(1, 1, (12, 4))
-        axs[0].barh(range(len(t20n)), t20n.values[::-1], color='#7F77DD', alpha=0.85, height=0.65)
-        axs[0].set_yticks(range(len(t20n)))
-        axs[0].set_yticklabels(t20n.index[::-1], fontsize=8, color='#e8eaf2')
-        axs[0].set_xlabel('|Pearson|', fontsize=9, color='#6b7280')
-        axs[0].set_title('Top 20 NLP Features — Correlation with log(RecommendationCount)',
+        axs[0].set_title(f'Top 40 TF-IDF Terms — {TC[sel_tf]}',
                          color='#e8eaf2', fontsize=9, fontfamily='monospace')
         plt.tight_layout()
         st.pyplot(fig, use_container_width=True)
         plt.close()
+
+        # ── LSA explained variance per field ─────────────────────────────
+        sec("LSA — Explained Variance per Field", "#7F77DD")
+        field_vars = [(k, svd_m[k].explained_variance_ratio_.cumsum()[-1] * 100) for k in CFG]
+        field_vars.sort(key=lambda x: x[1], reverse=True)
+        fig, axs = dark_fig(1, 1, (12, 4))
+        fkeys = [x[0] for x in field_vars]
+        fvals = [x[1] for x in field_vars]
+        bars  = axs[0].barh(range(len(fkeys)), fvals,
+                             color=[COLORS[i % len(COLORS)] for i in range(len(fkeys))],
+                             alpha=0.85, height=0.6)
+        axs[0].set_yticks(range(len(fkeys)))
+        axs[0].set_yticklabels(fkeys, fontsize=9, color='#e8eaf2')
+        axs[0].axvline(80, color='#888780', lw=1, linestyle='--', label='80%')
+        axs[0].legend(fontsize=8, framealpha=0.4)
+        axs[0].set_xlabel(f'Cumulative Variance (%) — {N} components', fontsize=8, color='#6b7280')
+        axs[0].set_title('LSA Variance Explained per Field',
+                         color='#e8eaf2', fontsize=9, fontfamily='monospace')
+        for bar, val in zip(bars, fvals):
+            axs[0].text(bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
+                        f'{val:.1f}%', va='center', fontsize=8, color='#e8eaf2')
+        plt.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close()
+
+        # ── LSA top words per component ───────────────────────────────────
+        sec("LSA — Top Words per Component (per field)", "#E8593C")
+        sel_field_lsa = st.selectbox("Field", keys_list, key="lsa_field_sel",
+                                     format_func=lambda k: TC[k])
+        comp_i = st.slider("Component", 1, N, 1, key="comp_sl") - 1
+        svd_f  = svd_m[sel_field_lsa]
+        vocab_f = vecs[sel_field_lsa].get_feature_names_out()
+        loading = svd_f.components_[comp_i]
+        top_idx = np.concatenate([loading.argsort()[-15:][::-1], loading.argsort()[:5]])
+        tw, ts  = vocab_f[top_idx], loading[top_idx]
+        cb      = ['#E8593C' if s > 0 else '#4C8EDA' for s in ts]
+        fig, axs = dark_fig(1, 1, (12, 5))
+        axs[0].barh(range(len(top_idx)), ts[::-1], color=cb[::-1], alpha=0.85, height=0.75)
+        axs[0].set_yticks(range(len(top_idx)))
+        axs[0].set_yticklabels(tw[::-1], fontsize=8, color='#e8eaf2')
+        axs[0].axvline(0, color='#6b7280', lw=0.8)
+        axs[0].set_title(f'{TC[sel_field_lsa]} — LSA Component {comp_i + 1}  '
+                         f'(red=positive, blue=negative)',
+                         color='#e8eaf2', fontsize=9, fontfamily='monospace')
+        plt.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close()
+
+        # ── NLP–target correlation ────────────────────────────────────────
+        sec("NLP Features — Correlation with Target", "#5bf6c8")
+        t20n = cn.head(20)
+        fig, axs = dark_fig(1, 1, (12, 4))
+        # colour by field
+        bar_colors = []
+        for feat in t20n.index[::-1]:
+            fld = feat.replace('lsa_', '').rsplit('_', 1)[0]
+            fi  = keys_list.index(fld) if fld in keys_list else 0
+            bar_colors.append(COLORS[fi % len(COLORS)])
+        axs[0].barh(range(len(t20n)), t20n.values[::-1], color=bar_colors, alpha=0.85, height=0.65)
+        axs[0].set_yticks(range(len(t20n)))
+        axs[0].set_yticklabels(t20n.index[::-1], fontsize=8, color='#e8eaf2')
+        axs[0].set_xlabel('|Pearson|', fontsize=9, color='#6b7280')
+        axs[0].set_title('Top 20 NLP Features — Correlation with log(RecommendationCount)  '
+                         '(colour = field)',
+                         color='#e8eaf2', fontsize=9, fontfamily='monospace')
+        plt.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close()
+
+        # ── LSA train vs test distributions ──────────────────────────────
+        sec("LSA Feature Distributions — Train vs Test", "#5b8df6")
+        sample_cols = []
+        for key in CFG:
+            sample_cols += [f'lsa_{key}_0', f'lsa_{key}_1']
+        sample_cols = [c for c in sample_cols if c in nlp_tr.columns][:10]
+        if sample_cols:
+            n_sc = len(sample_cols)
+            ncols_sc = min(5, n_sc)
+            nrows_sc = int(np.ceil(n_sc / ncols_sc))
+            fig, axs = dark_fig(nrows_sc, ncols_sc, (ncols_sc * 3.5, nrows_sc * 3.5))
+            for i, col in enumerate(sample_cols):
+                axs[i].hist(nlp_tr[col], bins=50, color='#4C8EDA', alpha=0.65,
+                            label='Train', edgecolor='none')
+                axs[i].hist(nlp_te[col], bins=50, color='#E8593C', alpha=0.65,
+                            label='Test',  edgecolor='none')
+                axs[i].set_title(col, fontsize=7.5, color='#e8eaf2', fontfamily='monospace')
+                axs[i].tick_params(labelsize=6.5)
+                if i == 0:
+                    axs[i].legend(fontsize=7, framealpha=0.4)
+            for j in range(n_sc, len(axs)):
+                axs[j].set_visible(False)
+            plt.suptitle("LSA Distributions — Train vs Test (first 2 components per field)",
+                         color='#e8eaf2', fontsize=9, fontfamily='monospace', y=1.02)
+            plt.tight_layout()
+            st.pyplot(fig, use_container_width=True)
+            plt.close()

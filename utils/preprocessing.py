@@ -165,7 +165,7 @@ CONTINUOUS_COLS = [c for c in CONTINUOUS_COLS if c in df.columns]
 X = df.drop(columns=['RecommendationCount'])
 y = df['RecommendationCount']
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
 # X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.1765, random_state=42)
 
 # Fill numeric NaNs using train medians
@@ -480,8 +480,53 @@ test_df.to_csv('./data/processed/test.csv', index=False)
 print(f"  Saved: ./data/processed/train.csv  → shape {train_df.shape}")
 # print(f"  Saved: ./data/processed/val.csv    → shape {val_df.shape}")
 print(f"  Saved: ./data/processed/test.csv   → shape {test_df.shape}")
+"""
+SCALER SAVE PATCH
+=================
+Add this to your preprocess.py AFTER you fit the StandardScaler
+(after the line: X_train[cont_feat_cols] = scaler.fit_transform(X_train[cont_feat_cols]))
+
+This saves the scaler so predict_page.py can load and apply it at inference time.
+
+The scaler must be fitted on the SAME continuous columns that you scaled during training.
+predict_page.py will load scaler.pkl and call scaler.transform() on the matching columns
+of the new game's feature vector.
+"""
+
+import joblib, os
+
+# ─── PASTE THIS BLOCK into preprocess.py right after scaler.fit_transform() ───
+
+# scaler is already defined as StandardScaler() and fitted on cont_feat_cols
+# cont_feat_cols is the list of continuous columns that were scaled
+
+os.makedirs('./models', exist_ok=True)
+joblib.dump(scaler, './models/scaler.pkl')
+print("Saved scaler → ./models/scaler.pkl")
 
 
+# Also save the column names the scaler was fitted on, embedded directly in the scaler:
+# sklearn's StandardScaler stores feature_names_in_ automatically when you pass a DataFrame.
+# Make sure you call:
+#   scaler.fit_transform(X_train[cont_feat_cols])          # X_train must be a DataFrame
+# NOT:
+#   scaler.fit_transform(X_train[cont_feat_cols].values)   # .values strips column names!
+
+# ─── HOW predict_page.py USES THE SCALER ──────────────────────────────────────
+# At inference time, predict_page.py does:
+#
+#   scaler = joblib.load('./models/scaler.pkl')
+#   scaler_cols = [c for c in scaler.feature_names_in_ if c in feat_df.columns]
+#   feat_df[scaler_cols] = scaler.transform(feat_df[scaler_cols])
+#
+# This applies the exact same mean/std from training to the new game's features.
+# Any feature the scaler doesn't know about is left untouched (e.g., binary flags, LSA).
+
+# ─── QUICK VERIFICATION ───────────────────────────────────────────────────────
+loaded = joblib.load('./models/scaler.pkl')
+print(f"Scaler fitted on {len(loaded.feature_names_in_)} columns:")
+print(list(loaded.feature_names_in_)[:10], "...")
+# ─────────────────────────────────────────────────────────────────
 # FINAL SUMMARY
 print("\n" + "="*60)
 print("FINAL DATASET SHAPES")
@@ -494,5 +539,4 @@ print(f"Binary/flag cols intact  : {len(binary_present)}")
 print(f"Text feature columns     : 0 (all dropped)")
 print("\nDone. Processed files saved:")
 print("  ./data/processed/train.csv")
-print("  ./data/processed/val.csv")
 print("  ./data/processed/test.csv")
