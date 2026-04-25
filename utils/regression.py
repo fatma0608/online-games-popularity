@@ -119,29 +119,29 @@ X_test      = pd.DataFrame(X_test_arr,  columns=kept_var)
 print(f"  [3b] VarianceThreshold={VAR_THRESHOLD} → dropped {len(before_var)-len(kept_var):3d} | remaining: {X_train.shape[1]}")
 
 # 3c — High inter-feature correlation
-CORR_THRESHOLD = 0.90
-target_corr = X_train.corrwith(y_train).abs()
-corr_matrix = X_train.corr().abs()
-upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-corr_drop = []
-for col in upper.columns:
-    for partner in upper.index[upper[col] > CORR_THRESHOLD].tolist():
-        if col not in corr_drop and partner not in corr_drop:
-            if target_corr.get(col, 0) < target_corr.get(partner, 0):
-                corr_drop.append(col)
-            else:
-                corr_drop.append(partner)
-X_train.drop(columns=corr_drop, inplace=True, errors='ignore')
-X_test.drop(columns=corr_drop,  inplace=True, errors='ignore')
-print(f"  [3c] High-corr (|r|>{CORR_THRESHOLD}) → dropped {len(corr_drop):3d} | remaining: {X_train.shape[1]}")
+# CORR_THRESHOLD = 0.90
+# target_corr = X_train.corrwith(y_train).abs()
+# corr_matrix = X_train.corr().abs()
+# upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+# corr_drop = []
+# for col in upper.columns:
+#     for partner in upper.index[upper[col] > CORR_THRESHOLD].tolist():
+#         if col not in corr_drop and partner not in corr_drop:
+#             if target_corr.get(col, 0) < target_corr.get(partner, 0):
+#                 corr_drop.append(col)
+#             else:
+#                 corr_drop.append(partner)
+# X_train.drop(columns=corr_drop, inplace=True, errors='ignore')
+# X_test.drop(columns=corr_drop,  inplace=True, errors='ignore')
+# print(f"  [3c] High-corr (|r|>{CORR_THRESHOLD}) → dropped {len(corr_drop):3d} | remaining: {X_train.shape[1]}")
 
 # 3d — Low target-correlation filter
-LOW_CORR_THRESHOLD = 0.005
-target_corr_final = X_train.corrwith(y_train).abs()
-low_corr_drop = target_corr_final[target_corr_final < LOW_CORR_THRESHOLD].index.tolist()
-X_train.drop(columns=low_corr_drop, inplace=True)
-X_test.drop(columns=low_corr_drop,  inplace=True)
-print(f"  [3d] Low target-corr (<{LOW_CORR_THRESHOLD}) → dropped {len(low_corr_drop):3d} | remaining: {X_train.shape[1]}")
+# LOW_CORR_THRESHOLD = 0.005
+# target_corr_final = X_train.corrwith(y_train).abs()
+# low_corr_drop = target_corr_final[target_corr_final < LOW_CORR_THRESHOLD].index.tolist()
+# X_train.drop(columns=low_corr_drop, inplace=True)
+# X_test.drop(columns=low_corr_drop,  inplace=True)
+# print(f"  [3d] Low target-corr (<{LOW_CORR_THRESHOLD}) → dropped {len(low_corr_drop):3d} | remaining: {X_train.shape[1]}")
 
 # 3e — RF importance (fixed threshold, not median)
 rf_for_sel = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
