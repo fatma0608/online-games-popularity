@@ -28,9 +28,8 @@ COLORS = {
 }
 
 
-# ══════════════════════════════════════════════════════════════════
-# STEP 1 — LOAD DATA AND ALIGN SPLITS
-# ══════════════════════════════════════════════════════════════════
+# LOAD DATA AND ALIGN SPLITS
+
 print("=" * 65)
 print("STEP 1: Loading Data and Aligning Splits")
 print("=" * 65)
@@ -69,9 +68,7 @@ train_merged.to_csv('./data/combined/train_combined.csv', index=False)
 test_merged.to_csv('./data/combined/test_combined.csv',   index=False)
 
 
-# ══════════════════════════════════════════════════════════════════
-# STEP 2 — SEPARATE FEATURES AND TARGET
-# ══════════════════════════════════════════════════════════════════
+#SEPARATE FEATURES AND TARGET
 print("\n" + "=" * 65)
 print("STEP 2: Separating Features and Target  (raw counts)")
 print("=" * 65)
@@ -87,9 +84,7 @@ print(f"  Target  — mean={y_train.mean():.1f}  median={y_train.median():.0f}  
 print(f"  Zeros   — {(y_train==0).sum()} / {len(y_train)} ({(y_train==0).mean()*100:.1f}%)")
 
 
-# ══════════════════════════════════════════════════════════════════
-# STEP 3 — FEATURE SELECTION  (fit on train only)
-# ══════════════════════════════════════════════════════════════════
+#FEATURE SELECTION  (fit on train only)
 print("\n" + "=" * 65)
 print("STEP 3: Feature Selection (fit on train only)")
 print("=" * 65)
@@ -134,9 +129,7 @@ print(imp_df.head(20).to_string(index=False))
 print(f"\n  Initial: {initial_features}  Final: {X_train.shape[1]}")
 
 
-# ══════════════════════════════════════════════════════════════════
 # STEP 4 — SAVE SELECTED FEATURES
-# ══════════════════════════════════════════════════════════════════
 os.makedirs('./data/selected', exist_ok=True)
 train_save = X_train.copy(); train_save[TARGET] = y_train.values
 test_save  = X_test.copy();  test_save[TARGET]  = y_test.values
@@ -145,9 +138,7 @@ test_save.to_csv('./data/selected/test_selected.csv',   index=False)
 print(f"\n  Saved → ./data/selected/  (train {train_save.shape}, test {test_save.shape})")
 
 
-# ══════════════════════════════════════════════════════════════════
-# EVALUATION HELPER
-# ══════════════════════════════════════════════════════════════════
+# EVALUATION 
 def evaluate(name, pred_train, pred_test, y_tr, y_te):
     def _m(yt, yp):
         return dict(
@@ -173,9 +164,7 @@ def evaluate(name, pred_train, pred_test, y_tr, y_te):
                 gap=gap)
 
 
-# ══════════════════════════════════════════════════════════════════
 # MODEL 1 — Decision Tree
-# ══════════════════════════════════════════════════════════════════
 print("\n" + "=" * 65)
 print("MODEL 1 — Decision Tree  |  RandomizedSearchCV 5-fold")
 print("=" * 65)
@@ -204,9 +193,7 @@ joblib.dump(best_dt, './models/decision_tree_tuned.pkl')
 print("  Saved → ./models/decision_tree_tuned.pkl")
 
 
-# ══════════════════════════════════════════════════════════════════
 # MODEL 2 — Random Forest
-# ══════════════════════════════════════════════════════════════════
 print("\n" + "=" * 65)
 print("MODEL 2 — Random Forest  |  RandomizedSearchCV 5-fold")
 print("=" * 65)
@@ -235,9 +222,7 @@ joblib.dump(best_rf, './models/random_forest_tuned.pkl')
 print("  Saved → ./models/random_forest_tuned.pkl")
 
 
-# ══════════════════════════════════════════════════════════════════
 # MODEL 3 — Bagging Regressor
-# ══════════════════════════════════════════════════════════════════
 print("\n" + "=" * 65)
 print("MODEL 3 — Bagging Regressor  |  RandomizedSearchCV 5-fold")
 print("=" * 65)
@@ -270,9 +255,7 @@ joblib.dump(best_bag, './models/bagging_tuned.pkl')
 print("  Saved → ./models/bagging_tuned.pkl")
 
 
-# ══════════════════════════════════════════════════════════════════
 # COMPARISON TABLE
-# ══════════════════════════════════════════════════════════════════
 all_results = [dt_res, rf_res, bag_res]
 
 print("\n" + "=" * 95)
@@ -291,9 +274,7 @@ best = max(all_results, key=lambda x: x['test_r2'])
 print(f"\n  Best model : {best['name']}  (test R²={best['test_r2']:.4f})")
 
 
-# ══════════════════════════════════════════════════════════════════
 # VISUALIZATIONS
-# ══════════════════════════════════════════════════════════════════
 model_names  = [r['name'] for r in all_results]
 model_preds  = [r['pred_test'] for r in all_results]
 
@@ -490,9 +471,7 @@ plt.close()
 print("Saved: ./plots/model_overfitting_check.png")
 
 
-# ══════════════════════════════════════════════════════════════════
 # FINAL SUMMARY
-# ══════════════════════════════════════════════════════════════════
 print("\n" + "=" * 65)
 print("OUTPUTS SUMMARY")
 print("=" * 65)
