@@ -1,19 +1,10 @@
 """
 pages/predict_page.py  ──  SteamML · Predict New Game
-Full-featured page with:
-  - Predict tab  : CSV paste / CSV upload / structured form → full pipeline → prediction
-  - Retrain tab  : Train / load saved models (from model_page.py)
-  - Feature Sel. : Feature selection pipeline (from model_page.py)
-
-Preprocessing mirror
----------------------
-1. Date engineering  (release_year / release_month / game_age_days)
-2. Derived numeric   (discount_ratio, is_effectively_free, …)
-3. Text-length flags (about_length, short_length, detail_length, …)
-4. SteamSpy log transforms
-5. Load saved TF-IDF + SVD  →  LSA features
-6. Load saved StandardScaler  →  scale continuous features
-7. Assemble final feature vector, align to model, predict
+Updated to match regression.py pipeline:
+  - Models: DecisionTree, RandomForest, BaggingRegressor
+  - Target: RecommendationCount (raw counts, NO log transform)
+  - Feature selection: dominant-value + VarianceThreshold + RF importance (>= 0.001)
+  - Predictions are raw recommendation counts (no expm1 needed)
 """
 
 import streamlit as st
@@ -32,53 +23,54 @@ for pkg in ["punkt", "stopwords", "wordnet", "omw-1.4", "punkt_tab"]:
         pass
 
 import matplotlib.pyplot as plt
-from sklearn.linear_model      import Ridge
 from sklearn.tree              import DecisionTreeRegressor
-from sklearn.ensemble          import RandomForestRegressor, GradientBoostingRegressor, IsolationForest
-from sklearn.model_selection   import RandomizedSearchCV, train_test_split
+from sklearn.ensemble          import RandomForestRegressor, BaggingRegressor
+from sklearn.model_selection   import RandomizedSearchCV
 from sklearn.metrics           import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.feature_selection import VarianceThreshold, SelectFromModel, mutual_info_regression
+from sklearn.feature_selection import VarianceThreshold
 from sklearn.preprocessing     import StandardScaler
-from scipy.stats               import loguniform, randint, uniform
+from scipy.stats               import randint, uniform
 
 # ─────────────────────────────────────────────────────────────────
-# CONSTANTS
+# CONSTANTS — updated to match regression.py
 # ─────────────────────────────────────────────────────────────────
 MODELS_DIR = "./models"
 SEL_DIR    = "./data/selected"
 PROC_DIR   = "./data/processed"
-TARGET     = "target_log"
+TARGET     = "RecommendationCount"          # raw counts — no log transform
 
 MODEL_FILES = {
-    "Ridge"            : "ridge_tuned.pkl",
-    "Decision Tree"    : "decision_tree_tuned.pkl",
-    "Random Forest"    : "random_forest_tuned.pkl",
-    "Gradient Boosting": "gradient_boosting_tuned.pkl",
+    "Decision Tree"  : "decision_tree_tuned.pkl",
+    "Random Forest"  : "random_forest_tuned.pkl",
+    "Bagging"        : "bagging_tuned.pkl",
 }
 MODEL_COLORS = {
-    "Ridge"            : "#4C8EDA",
-    "Decision Tree"    : "#8D6E63",
-    "Random Forest"    : "#1D9E75",
-    "Gradient Boosting": "#E8593C",
+    "Decision Tree"  : "#8D6E63",
+    "Random Forest"  : "#1D9E75",
+    "Bagging"        : "#4C8EDA",
 }
 MODEL_DESC = {
-    "Ridge": (
-        "Linear model with L2 regularisation. Fast, interpretable, strong baseline.",
-        ["alpha", "fit_intercept", "solver"]
-    ),
     "Decision Tree": (
-        "Single tree; interpretable and fast. High variance without regularisation.",
+        "Single decision tree with randomised hyperparameter search. "
+        "Interpretable and fast; higher variance without regularisation.",
         ["max_depth", "min_samples_leaf", "min_samples_split", "max_features", "criterion"]
     ),
     "Random Forest": (
-        "Ensemble of decorrelated decision trees. Naturally captures non-linearities.",
+        "Ensemble of decorrelated decision trees (bagging). "
+        "Naturally captures non-linearities; robust to overfitting.",
         ["n_estimators", "max_depth", "min_samples_leaf", "min_samples_split", "max_features"]
     ),
-    "Gradient Boosting": (
-        "Sequential boosting; each tree corrects the residuals of the previous one.",
-        ["n_estimators", "learning_rate", "max_depth", "subsample", "min_samples_leaf"]
+    "Bagging": (
+        "Bagging regressor with decision-tree base estimators. "
+        "Reduces variance by averaging predictions over bootstrapped samples.",
+        ["n_estimators", "max_samples", "max_features", "bootstrap", "bootstrap_features"]
     ),
 }
+
+# Feature-selection constants (mirrors regression.py)
+DOMINANT_THRESHOLD = 0.95
+VAR_THRESHOLD      = 0.001
+IMP_THRESHOLD      = 0.001
 
 # Columns that should NOT be IQR-capped (log-transformed instead)
 NO_IQR_COLS = [
@@ -99,26 +91,24 @@ CONT_FEAT_COLS_FOR_SCALING = [
     "SteamSpyPlayersEstimate_log", "SteamSpyPlayersVariance_log",
     "price_per_language", "metacritic_x_age",
     "owners_per_achievement", "dlc_x_owners", "movie_x_owners",
-    # NO_IQR_COLS (log-transformed versions)
     "RequiredAge", "DemoCount", "DeveloperCount",
     "DLCCount", "PackageCount", "PublisherCount",
     "ScreenshotCount",
 ]
 
-# NLP field map: key → raw column name
+# NLP field map
 NLP_FIELD_MAP = {
-    "about"          : "AboutText",
-    "short"          : "ShortDescrip",
-    "detail"         : "DetailedDescrip",
-    "reviews"        : "Reviews",
-    "name"           : "ResponseName",
-    "PCMinReqsText"  : "PCMinReqsText",
-    "PCRecReqsText"  : "PCRecReqsText",
+    "about"           : "AboutText",
+    "short"           : "ShortDescrip",
+    "detail"          : "DetailedDescrip",
+    "reviews"         : "Reviews",
+    "name"            : "ResponseName",
+    "PCMinReqsText"   : "PCMinReqsText",
+    "PCRecReqsText"   : "PCRecReqsText",
     "LinuxMinReqsText": "LinuxMinReqsText",
-    "MacMinReqsText" : "MacMinReqsText",
+    "MacMinReqsText"  : "MacMinReqsText",
 }
 
-# All raw input columns
 RAW_COLS = [
     "QueryID","ResponseID","QueryName","ResponseName","ReleaseDate",
     "RequiredAge","DemoCount","DeveloperCount","DLCCount","Metacritic",
@@ -191,7 +181,7 @@ BINARY_FLAGS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────
-# TEXT CLEANING  (mirrors preprocess.py / nlp_features.py)
+# TEXT CLEANING
 # ─────────────────────────────────────────────────────────────────
 _lemmatizer = WordNetLemmatizer()
 _stop_words = set(stopwords.words("english"))
@@ -275,6 +265,7 @@ def _data_ready():
 
 
 def _compute_metrics(model, X_tr, y_tr, X_te, y_te):
+    """Evaluate on raw RecommendationCount — no log transform."""
     X_tr = _align(model, X_tr)
     X_te = _align(model, X_te)
     p_tr = model.predict(X_tr)
@@ -283,10 +274,8 @@ def _compute_metrics(model, X_tr, y_tr, X_te, y_te):
     def _m(y_true, y_pred):
         return dict(
             rmse=np.sqrt(mean_squared_error(y_true, y_pred)),
-            mae=mean_absolute_error(y_true, y_pred),
-            r2=r2_score(y_true, y_pred),
-            rmse_orig=np.sqrt(mean_squared_error(np.expm1(y_true), np.expm1(y_pred))),
-            mae_orig=mean_absolute_error(np.expm1(y_true), np.expm1(y_pred)),
+            mae =mean_absolute_error(y_true, y_pred),
+            r2  =r2_score(y_true, y_pred),
         )
     return _m(y_tr, p_tr), _m(y_te, p_te), p_tr, p_te
 
@@ -298,6 +287,7 @@ def _preprocess_row(raw: dict, tfidf_vecs, svd_mods, scaler) -> pd.DataFrame:
     """
     Full mirror of preprocess.py + nlp_features.py for a single raw row.
     Returns a one-row DataFrame of processed + scaled features.
+    Predictions are on raw RecommendationCount (no log transform).
     """
 
     def flt(k, default=0.0):
@@ -431,7 +421,6 @@ def _preprocess_row(raw: dict, tfidf_vecs, svd_mods, scaler) -> pd.DataFrame:
         "movie_x_owners"               : movie_x_owners,
     }
 
-    # Binary flags
     for bf in BINARY_FLAGS:
         row_dict[bf] = flt(bf, 0.0)
 
@@ -439,7 +428,6 @@ def _preprocess_row(raw: dict, tfidf_vecs, svd_mods, scaler) -> pd.DataFrame:
 
     # ── 8. Scale continuous features (if scaler available) ────
     if scaler is not None:
-        # Only scale columns the scaler was fitted on that exist in feat_df
         scaler_cols = [c for c in scaler.feature_names_in_ if c in feat_df.columns] \
                       if hasattr(scaler, "feature_names_in_") \
                       else [c for c in CONT_FEAT_COLS_FOR_SCALING if c in feat_df.columns]
@@ -539,6 +527,8 @@ div[data-testid="stTextArea"] textarea{
 .status-no{color:#6b7280;font-family:monospace;font-size:11px;}
 .warn-box{background:#13161e;border:1px solid #f6c85b44;border-left:3px solid #f6c85b;
     border-radius:8px;padding:10px 14px;font-size:11px;color:#f6c85b;margin-bottom:12px;}
+.info-pill{display:inline-block;padding:3px 12px;border-radius:20px;font-size:10px;
+    font-family:var(--mono);background:#1a1e2b;border:1px solid var(--border);color:var(--muted);margin-right:6px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -572,15 +562,20 @@ with st.sidebar:
     st.markdown(f"<span style='color:{c}'>{d}</span>&nbsp;Scaler {'loaded ✓' if scaler_ok else 'not found (predictions still work)'}<br>",
                 unsafe_allow_html=True)
     d, c = _dot(bool(saved_models))
-    st.markdown(f"<span style='color:{c}'>{d}</span>&nbsp;{len(saved_models)} / {len(MODEL_FILES)} models saved</div>",
-                unsafe_allow_html=True)
+    st.markdown(
+        f"<span style='color:{c}'>{d}</span>&nbsp;{len(saved_models)} / {len(MODEL_FILES)} models saved<br>"
+        f"<span style='color:#4C8EDA'>●</span>&nbsp;Target: raw RecommendationCount</div>",
+        unsafe_allow_html=True,
+    )
 
 # ─────────────────────────────────────────────────────────────────
 # PAGE HEADER
 # ─────────────────────────────────────────────────────────────────
 st.markdown("""<div class="ph">
     <h1>🎯  SteamML · Predict &amp; Manage Models</h1>
-    <p>Predict new game recommendations · Feature selection · Train &amp; compare models</p>
+    <p>Predict new game recommendations · Feature selection · Train &amp; compare models
+    &nbsp;·&nbsp; <span style="color:#5bf6c8;font-family:monospace;font-size:11px">
+    Models: DecisionTree · RandomForest · Bagging &nbsp;|&nbsp; Target: raw RecommendationCount</span></p>
 </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
@@ -629,7 +624,7 @@ with tab_predict:
             f"border-left:4px solid {mc};border-radius:8px;padding:12px 16px;margin-top:22px;"
             f"font-size:11px;color:var(--muted);font-family:var(--mono)'>"
             f"<span style='color:{mc};font-weight:700'>{sel_model}</span> · "
-            f"{n_feats} features · pipeline: numeric + IQR + log + scale + LSA"
+            f"{n_feats} features · predicts raw RecommendationCount (no log transform)"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -654,7 +649,6 @@ with tab_predict:
         )
         form_data = {}
 
-        # Game identity & text
         st.markdown('<div class="sec"><div class="sec-dot" style="background:#f6c85b"></div>'
                     '<div class="sec-lbl">Game Identity &amp; Text</div></div>', unsafe_allow_html=True)
         ct1, ct2 = st.columns(2)
@@ -666,11 +660,11 @@ with tab_predict:
             form_data["Website"]             = st.text_input("Website URL",     value="", key="f_web")
             form_data["SupportEmail"]        = st.text_input("Support Email",   value="", key="f_email")
         with ct2:
-            form_data["AboutText"]           = st.text_area("About Text",       value="", height=80,  key="f_about")
-            form_data["ShortDescrip"]        = st.text_area("Short Description",value="", height=60,  key="f_short")
+            form_data["AboutText"]           = st.text_area("About Text",        value="", height=80,  key="f_about")
+            form_data["ShortDescrip"]        = st.text_area("Short Description", value="", height=60,  key="f_short")
 
         form_data["DetailedDescrip"]         = st.text_area("Detailed Description", value="", height=100, key="f_detail")
-        form_data["Reviews"]                 = st.text_area("Reviews Text",         value="", height=60,  key="f_reviews")
+        form_data["Reviews"]                 = st.text_area("Reviews Text",          value="", height=60,  key="f_reviews")
 
         pc1, pc2 = st.columns(2)
         with pc1:
@@ -682,7 +676,6 @@ with tab_predict:
                                                              value="OS: Windows 11\nCPU: Intel i7\nRAM: 16 GB",
                                                              height=70, key="f_pcrec")
 
-        # Numeric attributes
         st.markdown('<div class="sec"><div class="sec-dot" style="background:#5b8df6"></div>'
                     '<div class="sec-lbl">Numeric Attributes</div></div>', unsafe_allow_html=True)
         num_keys = list(FORM_NUMERIC.keys())
@@ -694,7 +687,6 @@ with tab_predict:
                     min_value=float(mn), max_value=float(mx), value=float(dv),
                     key=f"form_{feat}")
 
-        # Boolean flags
         st.markdown('<div class="sec"><div class="sec-dot" style="background:#5bf6c8"></div>'
                     '<div class="sec-lbl">Flags &amp; Categories</div></div>', unsafe_allow_html=True)
         for brow in [FORM_BOOL[i:i+5] for i in range(0, len(FORM_BOOL), 5)]:
@@ -702,7 +694,6 @@ with tab_predict:
             for bcol, bf in zip(bcols, brow):
                 form_data[bf] = int(bcol.checkbox(bf, value=False, key=f"form_{bf}"))
 
-        # Defaults for all other raw cols
         for c in RAW_COLS:
             if c not in form_data:
                 form_data[c] = ""
@@ -776,16 +767,12 @@ with tab_predict:
         st.markdown('<div class="sec"><div class="sec-dot" style="background:#5bf6c8"></div>'
                     '<div class="sec-lbl">Pipeline Execution</div></div>', unsafe_allow_html=True)
 
-        # Accumulate steps as (message, kind) tuples; render once at the end
-        # Kinds: "done" | "warn" | "err"
         _steps: list[tuple[str, str]] = []
         success   = False
-        log_pred  = 0.0
-        orig_pred = 0
+        raw_pred  = 0
         X_new     = None
 
         def _render_steps(steps):
-            """Build one HTML string from all accumulated steps and write it."""
             parts = []
             for msg, kind in steps:
                 if kind == "done":
@@ -794,15 +781,14 @@ with tab_predict:
                 elif kind == "warn":
                     style = "border-left:3px solid #f6c85b;color:#f6c85b"
                     icon  = "⚠"
-                else:                        # err
+                else:
                     style = "border-left:3px solid #f65b8d;color:#f65b8d"
                     icon  = "✗"
                 safe_msg = str(msg).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 parts.append(
                     f'<div class="pipeline-step" style="{style}">{icon} {safe_msg}</div>'
                 )
-            html = "\n".join(parts)
-            pipeline_placeholder.markdown(html, unsafe_allow_html=True)
+            pipeline_placeholder.markdown("\n".join(parts), unsafe_allow_html=True)
 
         pipeline_placeholder = st.empty()
 
@@ -830,9 +816,10 @@ with tab_predict:
             _steps.append((f"Feature alignment → {X_new.shape[1]} features matched to model", "done"))
             _render_steps(_steps)
 
-            log_pred  = float(pred_model.predict(X_new)[0])
-            orig_pred = int(np.round(np.expm1(log_pred)))
-            _steps.append((f"Prediction complete: log={log_pred:.4f} → {orig_pred:,} recommendations", "done"))
+            # Raw count prediction — no expm1 needed (regression.py trains on raw counts)
+            raw_pred = int(np.round(float(pred_model.predict(X_new)[0])))
+            raw_pred = max(0, raw_pred)   # clamp negative edge cases
+            _steps.append((f"Prediction complete: {raw_pred:,} raw recommendations", "done"))
             _render_steps(_steps)
             success = True
 
@@ -847,13 +834,10 @@ with tab_predict:
             st.markdown(
                 f"<div class='result-box'>"
                 f"<div style='font-size:11px;color:var(--muted);font-family:var(--mono);"
-                f"margin-bottom:10px'>{sel_model}</div>"
-                f"<div class='big'>{orig_pred:,}</div>"
+                f"margin-bottom:10px'>{sel_model} · raw RecommendationCount</div>"
+                f"<div class='big'>{raw_pred:,}</div>"
                 f"<div class='sub'>predicted Steam recommendations</div>"
-                f"<div style='margin-top:18px;display:flex;justify-content:center;gap:50px'>"
-                f"<div><div style='font-size:22px;font-family:var(--mono);color:{mc}'>{log_pred:.4f}</div>"
-                f"<div style='font-size:10px;color:var(--muted)'>log-space</div></div>"
-                f"</div></div>",
+                f"</div>",
                 unsafe_allow_html=True,
             )
 
@@ -863,27 +847,29 @@ with tab_predict:
                 if os.path.exists(train_sel_path):
                     train_ref   = pd.read_csv(train_sel_path)
                     X_ref       = train_ref.drop(columns=[TARGET], errors="ignore")
+                    y_ref       = train_ref[TARGET] if TARGET in train_ref.columns else None
                     X_ref_align = _align(pred_model, X_ref)
                     train_preds = pred_model.predict(X_ref_align)
-                    train_orig  = np.expm1(train_preds)
-                    pct         = float((train_preds < log_pred).mean() * 100)
+                    train_preds = np.maximum(train_preds, 0)
+                    pct         = float((train_preds < raw_pred).mean() * 100)
 
                     st.markdown('<div class="sec"><div class="sec-dot" style="background:#f6c85b"></div>'
                                 '<div class="sec-lbl">Prediction Context</div></div>', unsafe_allow_html=True)
                     c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Your Game",    f"{orig_pred:,}")
-                    c2.metric("Train Mean",   f"{int(train_orig.mean()):,}")
-                    c3.metric("Train Median", f"{int(np.median(train_orig)):,}")
+                    c1.metric("Your Game",    f"{raw_pred:,}")
+                    c2.metric("Train Mean",   f"{int(train_preds.mean()):,}")
+                    c3.metric("Train Median", f"{int(np.median(train_preds)):,}")
                     c4.metric("Percentile",   f"{pct:.1f}%")
 
                     fig, ax = plt.subplots(figsize=(12, 3.5), facecolor="#13161e")
                     ax.set_facecolor("#1a1e2b")
-                    ax.hist(train_preds, bins=70, color="#4C8EDA", alpha=0.75, edgecolor="none", label="Training games")
-                    ax.axvline(log_pred, color="#5bf6c8", lw=2.2, linestyle="--",
-                               label=f"Your game ({log_pred:.3f})")
-                    ax.set_title("Your game vs training distribution (log-space)",
+                    ax.hist(train_preds, bins=70, color="#4C8EDA", alpha=0.75, edgecolor="none",
+                            label="Training games")
+                    ax.axvline(raw_pred, color="#5bf6c8", lw=2.2, linestyle="--",
+                               label=f"Your game ({raw_pred:,})")
+                    ax.set_title("Your game vs training distribution (raw RecommendationCount)",
                                  color="#e8eaf2", fontsize=9, fontfamily="monospace")
-                    ax.set_xlabel("Predicted log(recommendations)", fontsize=8, color="#6b7280")
+                    ax.set_xlabel("Predicted RecommendationCount", fontsize=8, color="#6b7280")
                     ax.tick_params(colors="#6b7280", labelsize=7)
                     for sp in ax.spines.values():
                         sp.set_color("#252a38")
@@ -900,16 +886,16 @@ with tab_predict:
 
 # ══════════════════════════════════════════════════════════════════
 # TAB 2 — FEATURE SELECTION
+# Mirrors regression.py: dominant-value → VarianceThreshold → RF importance
 # ══════════════════════════════════════════════════════════════════
 with tab_fs:
     st.markdown(
         "<div style='background:#13161e;border:1px solid #252a38;border-radius:10px;"
         "padding:16px 20px;font-size:12px;color:#6b7280;line-height:2;margin-bottom:20px'>"
-        "Pipeline: <b style='color:#e8eaf2'>Dominant-value filter</b> → "
-        "<b style='color:#e8eaf2'>VarianceThreshold</b> → "
-        "<b style='color:#e8eaf2'>High inter-feature correlation</b> → "
-        "<b style='color:#e8eaf2'>Low target-correlation</b> → "
-        "<b style='color:#e8eaf2'>RandomForest SelectFromModel (median)</b> → "
+        "Pipeline (mirrors <code>regression.py</code>): "
+        "<b style='color:#e8eaf2'>① Dominant-value filter</b> (≥ 95%) → "
+        "<b style='color:#e8eaf2'>② VarianceThreshold</b> (var &lt; 0.001) → "
+        "<b style='color:#e8eaf2'>③ RF importance filter</b> (importance ≥ 0.001) → "
         "Save to <code>./data/selected/</code>"
         "</div>",
         unsafe_allow_html=True,
@@ -939,13 +925,11 @@ with tab_fs:
         st.markdown(
             "<div style='background:#13161e;border:1px solid #252a38;border-radius:10px;"
             "padding:16px 18px;font-size:12px;color:#6b7280;line-height:2'>"
-            "① Merge processed + NLP CSVs (if available)<br>"
+            "① Merge processed + NLP CSVs (position-aligned)<br>"
             "② Dominant-value filter  (≥ 95%)<br>"
-            "③ VarianceThreshold  (var &lt; 0.01)<br>"
-            "④ High inter-feature corr  (|r| &gt; 0.90)<br>"
-            "⑤ Low target-corr  (|r| &lt; 0.01)<br>"
-            "⑥ RF SelectFromModel  (threshold = median)<br>"
-            "⑦ Save  →  ./data/selected/"
+            "③ VarianceThreshold  (threshold = 0.001)<br>"
+            "④ RF importance filter  (importance ≥ 0.001)<br>"
+            "⑤ Save  →  ./data/selected/"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -966,7 +950,7 @@ with tab_fs:
             st.markdown(f'<div class="log-box">{html}</div>', unsafe_allow_html=True)
 
         try:
-            L("// Feature Selection started ─────────────")
+            L("// Feature Selection started (regression.py pipeline) ─────────────")
 
             def merge_split(num_df, nlp_df=None):
                 num_df = num_df.reset_index(drop=True)
@@ -993,92 +977,61 @@ with tab_fs:
                 L("  NLP features not found — using numeric only", "muted")
                 L(f"  train={train_df.shape}  test={test_df.shape}")
 
-            val_path = os.path.join(PROC_DIR, "val.csv")
-            has_val  = os.path.exists(val_path)
-            val_df   = None
-            if has_val:
-                val_num = pd.read_csv(val_path)
-                if nlp_avail and os.path.exists(os.path.join(PROC_DIR, "nlp_features_val.csv")):
-                    val_nlp = pd.read_csv(os.path.join(PROC_DIR, "nlp_features_val.csv"))
-                    val_df  = merge_split(val_num, val_nlp)
-                else:
-                    val_df = merge_split(val_num)
-
-            X_train = train_df.drop(columns=[TARGET]); y_train = train_df[TARGET]
-            X_test  = test_df.drop(columns=[TARGET]);  y_test  = test_df[TARGET]
-            if has_val:
-                X_val = val_df.drop(columns=[TARGET]); y_val = val_df[TARGET]
+            X_train = train_df.drop(columns=[TARGET], errors="ignore")
+            y_train = train_df[TARGET]
+            X_test  = test_df.drop(columns=[TARGET], errors="ignore")
+            y_test  = test_df[TARGET]
 
             initial = X_train.shape[1]
+            L(f"  initial features: {initial}")
 
-            # ① Dominant-value filter
-            dom_drop = [c for c in X_train.columns
-                        if X_train[c].value_counts(normalize=True, dropna=False).max() >= 0.95]
-            for df_ in ([X_train, X_test] + ([X_val] if has_val else [])):
-                df_.drop(columns=dom_drop, inplace=True)
-            L(f"  [①] dominant-value  → dropped {len(dom_drop):3d}  remaining: {X_train.shape[1]}", "muted")
+            # ① Dominant-value filter — mirrors regression.py STEP 3a
+            dom_drop = [col for col in X_train.columns
+                        if X_train[col].value_counts(normalize=True, dropna=False).max() >= DOMINANT_THRESHOLD]
+            X_train.drop(columns=dom_drop, inplace=True)
+            X_test.drop(columns=dom_drop,  inplace=True)
+            L(f"  [①] dominant-value filter → dropped {len(dom_drop):3d}  remaining: {X_train.shape[1]}", "muted")
 
-            # ② VarianceThreshold
-            cols_bvt = X_train.columns.tolist()
-            vt       = VarianceThreshold(threshold=0.01)
-            Xtr_a    = vt.fit_transform(X_train)
-            Xte_a    = vt.transform(X_test)
-            sel_vt   = [c for c, k in zip(cols_bvt, vt.get_support()) if k]
-            X_train  = pd.DataFrame(Xtr_a, columns=sel_vt)
-            X_test   = pd.DataFrame(Xte_a, columns=sel_vt)
-            if has_val:
-                X_val = pd.DataFrame(vt.transform(X_val), columns=sel_vt)
-            L(f"  [②] VarianceThreshold → dropped {len(cols_bvt) - len(sel_vt):3d}  remaining: {X_train.shape[1]}", "muted")
+            # ② VarianceThreshold — mirrors regression.py STEP 3b
+            before_var = X_train.columns.tolist()
+            vt         = VarianceThreshold(threshold=VAR_THRESHOLD)
+            Xtr_a      = vt.fit_transform(X_train)
+            Xte_a      = vt.transform(X_test)
+            sel_vt     = [c for c, k in zip(before_var, vt.get_support()) if k]
+            X_train    = pd.DataFrame(Xtr_a, columns=sel_vt)
+            X_test     = pd.DataFrame(Xte_a, columns=sel_vt)
+            L(f"  [②] VarianceThreshold={VAR_THRESHOLD} → dropped {len(before_var)-len(sel_vt):3d}  remaining: {X_train.shape[1]}", "muted")
 
-            # ③ High inter-feature correlation
-            corr_mat  = X_train.corr().abs()
-            upper     = corr_mat.where(np.triu(np.ones(corr_mat.shape), k=1).astype(bool))
-            tgt_corr  = X_train.corrwith(y_train).abs()
-            corr_drop = []
-            for col in upper.columns:
-                for partner in upper.index[upper[col] > 0.90].tolist():
-                    if col not in corr_drop and partner not in corr_drop:
-                        drop_col = col if tgt_corr.get(col, 0) < tgt_corr.get(partner, 0) else partner
-                        corr_drop.append(drop_col)
-            for df_ in ([X_train, X_test] + ([X_val] if has_val else [])):
-                df_.drop(columns=corr_drop, inplace=True, errors="ignore")
-            L(f"  [③] high corr       → dropped {len(corr_drop):3d}  remaining: {X_train.shape[1]}", "muted")
-
-            # ④ Low target-correlation
-            low_drop = X_train.corrwith(y_train).abs()
-            low_drop = low_drop[low_drop < 0.01].index.tolist()
-            for df_ in ([X_train, X_test] + ([X_val] if has_val else [])):
-                df_.drop(columns=low_drop, inplace=True)
-            L(f"  [④] low target-corr → dropped {len(low_drop):3d}  remaining: {X_train.shape[1]}", "muted")
-
-            # ⑤ RF SelectFromModel
-            L("  [⑤] fitting RandomForest for importance …")
-            rf_sel = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            # ③ RF importance filter — mirrors regression.py STEP 3e
+            L("  [③] fitting RandomForest for importance … (n_estimators=200)")
+            rf_sel = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
             rf_sel.fit(X_train, y_train)
-            all_feats = X_train.columns.tolist()
-            imp_df    = pd.DataFrame({
-                "feature": all_feats, "importance": rf_sel.feature_importances_
+            importances   = rf_sel.feature_importances_
+            imp_mask      = importances >= IMP_THRESHOLD
+            selected_cols = X_train.columns[imp_mask].tolist()
+            dropped_imp   = X_train.columns[~imp_mask].tolist()
+            X_train = X_train[selected_cols]
+            X_test  = X_test[selected_cols]
+
+            imp_df = pd.DataFrame({
+                "feature":    selected_cols,
+                "importance": importances[imp_mask]
             }).sort_values("importance", ascending=False)
-            selector  = SelectFromModel(rf_sel, threshold="median", prefit=True)
-            sel_rf    = [c for c, k in zip(all_feats, selector.get_support()) if k]
-            X_train   = pd.DataFrame(selector.transform(X_train), columns=sel_rf)
-            X_test    = pd.DataFrame(selector.transform(X_test),  columns=sel_rf)
-            if has_val:
-                X_val = pd.DataFrame(selector.transform(X_val), columns=sel_rf)
-            L(f"  [⑤] SelectFromModel → kept {len(sel_rf)}  dropped {len(all_feats) - len(sel_rf)}", "muted")
+
+            L(f"  [③] RF importance >= {IMP_THRESHOLD} → dropped {len(dropped_imp):3d}  remaining: {X_train.shape[1]}", "muted")
 
             # Save
             os.makedirs(SEL_DIR, exist_ok=True)
-            out_tr = X_train.copy(); out_tr[TARGET] = y_train.values; out_tr.to_csv(os.path.join(SEL_DIR, "train_selected.csv"), index=False)
-            out_te = X_test.copy();  out_te[TARGET] = y_test.values;  out_te.to_csv(os.path.join(SEL_DIR, "test_selected.csv"),  index=False)
-            if has_val:
-                out_va = X_val.copy(); out_va[TARGET] = y_val.values; out_va.to_csv(os.path.join(SEL_DIR, "val_selected.csv"), index=False)
+            out_tr = X_train.copy(); out_tr[TARGET] = y_train.values
+            out_te = X_test.copy();  out_te[TARGET] = y_test.values
+            out_tr.to_csv(os.path.join(SEL_DIR, "train_selected.csv"), index=False)
+            out_te.to_csv(os.path.join(SEL_DIR, "test_selected.csv"),  index=False)
             L("  saved to ./data/selected/")
             L(f"  initial={initial}  final={X_train.shape[1]}  removed={initial - X_train.shape[1]}")
             L("// Feature Selection Done ✓ ──────────────")
 
             st.session_state["fs_imp_df"]    = imp_df
-            st.session_state["fs_sel_feats"] = sel_rf
+            st.session_state["fs_sel_feats"] = selected_cols
 
         except Exception as e:
             L(f"ERROR: {e}", "err")
@@ -1098,7 +1051,7 @@ with tab_fs:
         c1.metric("Final Features", len(feat_cols))
         c2.metric("Train Rows",     f"{len(train_sel):,}")
         c3.metric("Test Rows",      f"{len(test_sel):,}")
-        c4.metric("Target",         "target_log (log1p)")
+        c4.metric("Target",         "RecommendationCount (raw)")
 
         st.markdown('<div class="sec"><div class="sec-dot" style="background:#5b8df6"></div>'
                     '<div class="sec-lbl">Feature List</div></div>', unsafe_allow_html=True)
@@ -1111,15 +1064,16 @@ with tab_fs:
         imp_df = st.session_state.get("fs_imp_df")
         if imp_df is not None:
             st.markdown('<div class="sec"><div class="sec-dot" style="background:#f6c85b"></div>'
-                        '<div class="sec-lbl">RandomForest Feature Importances — Top 30</div></div>', unsafe_allow_html=True)
-            top30 = imp_df.head(30)
+                        '<div class="sec-lbl">RandomForest Feature Importances — Top 25</div></div>', unsafe_allow_html=True)
+            top25 = imp_df.head(25)
             fig, ax = plt.subplots(figsize=(14, 7), facecolor="#13161e")
             ax.set_facecolor("#1a1e2b")
-            clrs = [MODEL_COLORS["Random Forest"] if "lsa" not in f else "#7F77DD" for f in top30["feature"]]
-            ax.barh(range(len(top30)), top30["importance"].values[::-1], color=clrs[::-1], alpha=0.85, height=0.75)
-            ax.set_yticks(range(len(top30)))
-            ax.set_yticklabels(top30["feature"].values[::-1], fontsize=8, color="#e8eaf2")
-            ax.set_title("Top 30 Feature Importances (green=numeric, purple=NLP/LSA)",
+            clrs = [MODEL_COLORS["Random Forest"] if "lsa" not in f else "#7F77DD" for f in top25["feature"]]
+            ax.barh(range(len(top25)), top25["importance"].values[::-1],
+                    color=clrs[::-1], alpha=0.85, height=0.75)
+            ax.set_yticks(range(len(top25)))
+            ax.set_yticklabels(top25["feature"].values[::-1], fontsize=8, color="#e8eaf2")
+            ax.set_title("Top 25 Feature Importances (green=numeric, purple=NLP/LSA)",
                          color="#e8eaf2", fontsize=9, fontfamily="monospace")
             ax.set_xlabel("Importance", fontsize=8, color="#6b7280")
             ax.tick_params(colors="#6b7280", labelsize=7)
@@ -1131,6 +1085,7 @@ with tab_fs:
 
 # ══════════════════════════════════════════════════════════════════
 # TAB 3 — TRAIN / LOAD MODELS
+# Models: DecisionTree, RandomForest, BaggingRegressor — mirrors regression.py
 # ══════════════════════════════════════════════════════════════════
 with tab_train:
     if not _data_ready():
@@ -1140,26 +1095,19 @@ with tab_train:
         def _load_train_data():
             tr = pd.read_csv(os.path.join(SEL_DIR, "train_selected.csv"))
             te = pd.read_csv(os.path.join(SEL_DIR, "test_selected.csv"))
-            X_tr = tr.drop(columns=[TARGET]); y_tr = tr[TARGET]
-            X_te = te.drop(columns=[TARGET]); y_te = te[TARGET]
-            vp = os.path.join(SEL_DIR, "val_selected.csv")
-            if os.path.exists(vp):
-                va  = pd.read_csv(vp)
-                X_va = va.drop(columns=[TARGET]); y_va = va[TARGET]
-                X_tv = pd.concat([X_tr, X_va]).reset_index(drop=True)
-                y_tv = pd.concat([y_tr, y_va]).reset_index(drop=True)
-            else:
-                X_tv, y_tv = X_tr.reset_index(drop=True), y_tr.reset_index(drop=True)
-            return X_tr, y_tr, X_te, y_te, X_tv, y_tv
+            X_tr = tr.drop(columns=[TARGET]); y_tr = tr[TARGET].astype(float)
+            X_te = te.drop(columns=[TARGET]); y_te = te[TARGET].astype(float)
+            return X_tr, y_tr, X_te, y_te
 
-        X_train, y_train, X_test, y_test, X_tv, y_tv = _load_train_data()
+        X_train, y_train, X_test, y_test = _load_train_data()
 
         st.markdown(
             f"<div style='background:#13161e;border:1px solid #252a38;border-radius:10px;"
             f"padding:14px 20px;font-size:12px;color:#6b7280;margin-bottom:18px'>"
-            f"Data loaded · train+val = <b style='color:#e8eaf2'>{len(X_tv):,}</b> rows · "
+            f"Data loaded · train = <b style='color:#e8eaf2'>{len(X_train):,}</b> rows · "
             f"test = <b style='color:#e8eaf2'>{len(X_test):,}</b> rows · "
-            f"features = <b style='color:#e8eaf2'>{X_train.shape[1]}</b>"
+            f"features = <b style='color:#e8eaf2'>{X_train.shape[1]}</b> · "
+            f"target = <b style='color:#5bf6c8'>raw RecommendationCount</b>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -1224,41 +1172,51 @@ with tab_train:
                     with st.spinner(f"Training {name} …"):
                         try:
                             os.makedirs(MODELS_DIR, exist_ok=True)
-                            L(f"// Training {name} ─────────────────────")
+                            L(f"// Training {name} (raw RecommendationCount) ─────────────")
 
-                            if name == "Ridge":
-                                param_dist = {"alpha": loguniform(1e-3, 1e4),
-                                              "fit_intercept": [True, False],
-                                              "solver": ["auto", "svd", "cholesky", "lsqr", "saga"]}
-                                base = Ridge()
-                            elif name == "Decision Tree":
-                                param_dist = {"max_depth": [3,4,5,6,8,10,15,None],
-                                              "min_samples_split": randint(2, 40),
-                                              "min_samples_leaf": randint(1, 30),
-                                              "max_features": ["sqrt","log2",0.5,0.7,None],
-                                              "criterion": ["squared_error","friedman_mse","absolute_error"]}
-                                base = DecisionTreeRegressor(random_state=42)
+                            # ── Param grids mirror regression.py exactly ──────────────
+                            if name == "Decision Tree":
+                                param_dist = {
+                                    "max_depth"         : [3, 4, 5, 6, 8, 10, 15, None],
+                                    "min_samples_split" : randint(2, 40),
+                                    "min_samples_leaf"  : randint(1, 30),
+                                    "max_features"      : ["sqrt", "log2", 0.5, 0.7, None],
+                                    "criterion"         : ["squared_error", "friedman_mse", "absolute_error"],
+                                }
+                                base   = DecisionTreeRegressor(random_state=42)
+                                n_iter = 40
+
                             elif name == "Random Forest":
-                                param_dist = {"n_estimators": randint(100, 600),
-                                              "max_depth": [None,5,10,15,20,30],
-                                              "min_samples_leaf": randint(1, 30),
-                                              "min_samples_split": randint(2, 20),
-                                              "max_features": ["sqrt","log2",0.3,0.5,0.7]}
-                                base = RandomForestRegressor(random_state=42, n_jobs=-1)
-                            else:
-                                param_dist = {"n_estimators": randint(100, 600),
-                                              "learning_rate": loguniform(0.01, 0.3),
-                                              "max_depth": randint(2, 8),
-                                              "subsample": uniform(0.6, 0.4),
-                                              "min_samples_leaf": randint(5, 40),
-                                              "max_features": ["sqrt","log2",0.5,0.7,None]}
-                                base = GradientBoostingRegressor(random_state=42)
+                                param_dist = {
+                                    "n_estimators"      : randint(100, 600),
+                                    "max_depth"         : [None, 5, 10, 15, 20, 30],
+                                    "min_samples_leaf"  : randint(1, 30),
+                                    "min_samples_split" : randint(2, 20),
+                                    "max_features"      : ["sqrt", "log2", 0.3, 0.5, 0.7],
+                                }
+                                base   = RandomForestRegressor(random_state=42, n_jobs=-1)
+                                n_iter = 40
+
+                            else:  # Bagging
+                                param_dist = {
+                                    "n_estimators"      : randint(50, 300),
+                                    "max_samples"       : uniform(0.5, 0.5),
+                                    "max_features"      : uniform(0.5, 0.5),
+                                    "bootstrap"         : [True, False],
+                                    "bootstrap_features": [True, False],
+                                }
+                                base = BaggingRegressor(
+                                    estimator=DecisionTreeRegressor(random_state=42),
+                                    random_state=42, n_jobs=-1
+                                )
+                                n_iter = 30
 
                             search = RandomizedSearchCV(
-                                base, param_dist, n_iter=40, cv=5,
+                                base, param_dist,
+                                n_iter=n_iter, cv=5,
                                 scoring="r2", n_jobs=-1, random_state=42, verbose=0
                             )
-                            search.fit(X_tv, y_tv)
+                            search.fit(X_train, y_train)
                             best  = search.best_estimator_
                             cv_r2 = search.best_score_
                             L(f"  CV R²  = {cv_r2:.4f}")
@@ -1268,7 +1226,11 @@ with tab_train:
                             p_te    = best.predict(X_te_aligned)
                             r2_te   = r2_score(y_test, p_te)
                             rmse_te = np.sqrt(mean_squared_error(y_test, p_te))
-                            L(f"  test R² = {r2_te:.4f}  RMSE = {rmse_te:.4f}")
+                            mae_te  = mean_absolute_error(y_test, p_te)
+                            gap     = r2_score(y_train, best.predict(X_train)) - r2_te
+                            L(f"  test R²={r2_te:.4f}  RMSE={rmse_te:.2f}  MAE={mae_te:.2f}")
+                            flag = "  ← watch (overfit)" if gap > 0.10 else "  ✓ OK"
+                            L(f"  R² gap={gap:.4f}{flag}", "muted")
 
                             joblib.dump(best, os.path.join(MODELS_DIR, MODEL_FILES[name]))
                             L(f"  saved → {MODEL_FILES[name]}")
@@ -1283,6 +1245,7 @@ with tab_train:
 
 # ══════════════════════════════════════════════════════════════════
 # TAB 4 — MODEL COMPARISON
+# All metrics on raw RecommendationCount — mirrors regression.py output
 # ══════════════════════════════════════════════════════════════════
 with tab_compare:
     saved_now = {n: n for n in MODEL_FILES if _model_exists(n)}
@@ -1296,25 +1259,17 @@ with tab_compare:
         def _load_cmp_data():
             tr = pd.read_csv(os.path.join(SEL_DIR, "train_selected.csv"))
             te = pd.read_csv(os.path.join(SEL_DIR, "test_selected.csv"))
-            X_tr = tr.drop(columns=[TARGET]); y_tr = tr[TARGET]
-            X_te = te.drop(columns=[TARGET]); y_te = te[TARGET]
-            vp = os.path.join(SEL_DIR, "val_selected.csv")
-            if os.path.exists(vp):
-                va  = pd.read_csv(vp)
-                X_va = va.drop(columns=[TARGET]); y_va = va[TARGET]
-                X_tv = pd.concat([X_tr, X_va]).reset_index(drop=True)
-                y_tv = pd.concat([y_tr, y_va]).reset_index(drop=True)
-            else:
-                X_tv, y_tv = X_tr.reset_index(drop=True), y_tr.reset_index(drop=True)
-            return X_tv, y_tv, X_te, y_te
+            X_tr = tr.drop(columns=[TARGET]); y_tr = tr[TARGET].astype(float)
+            X_te = te.drop(columns=[TARGET]); y_te = te[TARGET].astype(float)
+            return X_tr, y_tr, X_te, y_te
 
-        X_tv_c, y_tv_c, X_te_c, y_te_c = _load_cmp_data()
+        X_tr_c, y_tr_c, X_te_c, y_te_c = _load_cmp_data()
 
         results, skipped = {}, []
         for name in saved_now:
             try:
                 m = _load_model(name)
-                tr_m, te_m, p_tr, p_te = _compute_metrics(m, X_tv_c, y_tv_c, X_te_c, y_te_c)
+                tr_m, te_m, p_tr, p_te = _compute_metrics(m, X_tr_c, y_tr_c, X_te_c, y_te_c)
                 results[name] = dict(train=tr_m, test=te_m, p_tr=p_tr, p_te=p_te, model=m)
             except Exception as e:
                 skipped.append((name, str(e)))
@@ -1323,16 +1278,29 @@ with tab_compare:
             st.warning(f"⚠️  Skipped **{sn}**: {se}")
 
         if results:
+            st.markdown(
+                "<div style='background:#13161e;border:1px solid #252a38;border-radius:8px;"
+                "padding:10px 16px;font-size:11px;color:#6b7280;margin-bottom:16px'>"
+                "All metrics are on <b style='color:#5bf6c8'>raw RecommendationCount</b> — no log transform.</div>",
+                unsafe_allow_html=True,
+            )
+
             st.markdown('<div class="sec"><div class="sec-dot" style="background:#5bf6c8"></div>'
                         '<div class="sec-lbl">Performance Summary — Test Set</div></div>', unsafe_allow_html=True)
             rows = []
             for name, res in results.items():
                 te, tr = res["test"], res["train"]
-                rows.append({"Model": name,
-                             "R² Test": round(te["r2"], 4), "R² Train": round(tr["r2"], 4),
-                             "Gap": round(tr["r2"] - te["r2"], 4),
-                             "RMSE (log)": round(te["rmse"], 4), "MAE (log)": round(te["mae"], 4),
-                             "RMSE (orig)": f"{te['rmse_orig']:,.0f}", "MAE (orig)": f"{te['mae_orig']:,.0f}"})
+                gap    = tr["r2"] - te["r2"]
+                flag   = " !" if gap > 0.10 else "  "
+                rows.append({
+                    "Model"     : name,
+                    "R² Test"   : round(te["r2"],   4),
+                    "R² Train"  : round(tr["r2"],   4),
+                    "Gap"       : round(gap,          4),
+                    "RMSE"      : round(te["rmse"],  2),
+                    "MAE"       : round(te["mae"],   2),
+                    "Overfit?"  : "⚠ Yes" if gap > 0.10 else "✓ OK",
+                })
             df_res = pd.DataFrame(rows).sort_values("R² Test", ascending=False)
             st.dataframe(df_res, use_container_width=True, hide_index=True)
 
@@ -1346,52 +1314,93 @@ with tab_compare:
                 unsafe_allow_html=True,
             )
 
-            # Bar charts
+            # Bar charts — RMSE / MAE / R²
             st.markdown('<div class="sec"><div class="sec-dot" style="background:#f6c85b"></div>'
                         '<div class="sec-lbl">Metric Comparison</div></div>', unsafe_allow_html=True)
             names  = list(results.keys())
             colors = [MODEL_COLORS.get(n, "#888") for n in names]
 
             fig, axs = plt.subplots(1, 3, figsize=(18, 5), facecolor="#13161e")
-            for ax, (metric, label) in zip(axs, [("r2","R² (↑)"), ("rmse","RMSE log (↓)"), ("mae","MAE log (↓)")]):
+            for ax, (metric, label) in zip(axs, [
+                ("r2",   "R² (higher = better)"),
+                ("rmse", "RMSE (lower = better)"),
+                ("mae",  "MAE  (lower = better)"),
+            ]):
                 ax.set_facecolor("#1a1e2b")
                 vals = [results[n]["test"][metric] for n in names]
-                bars = ax.bar(names, vals, color=colors, alpha=0.85, width=0.55)
+                bars = ax.bar(names, vals, color=colors, alpha=0.85, width=0.5)
                 for bar, v in zip(bars, vals):
-                    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(vals)*0.01,
-                            f"{v:.4f}", ha="center", va="bottom", fontsize=7, color="#e8eaf2", rotation=45)
+                    ax.text(bar.get_x() + bar.get_width()/2,
+                            bar.get_height() + max(abs(x) for x in vals)*0.01,
+                            f"{v:.3f}", ha="center", va="bottom",
+                            fontsize=7, color="#e8eaf2")
                 ax.set_title(label, color="#e8eaf2", fontsize=9, fontfamily="monospace")
                 ax.tick_params(labelsize=7, colors="#6b7280")
-                ax.set_xticklabels(names, rotation=30, ha="right", fontsize=7)
-                ax.set_ylim(0, max(vals)*1.22)
+                ax.set_xticklabels(names, rotation=20, ha="right", fontsize=8)
+                ax.set_ylim(0, max(abs(x) for x in vals)*1.22)
                 for sp in ax.spines.values(): sp.set_color("#252a38")
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close()
 
-            # Actual vs Predicted
-            st.markdown('<div class="sec"><div class="sec-dot" style="background:#5b8df6"></div>'
-                        '<div class="sec-lbl">Actual vs Predicted — Test Set</div></div>', unsafe_allow_html=True)
+            # Train vs Test R² overfitting check — mirrors regression.py plot 6
+            st.markdown('<div class="sec"><div class="sec-dot" style="background:#f65b8d"></div>'
+                        '<div class="sec-lbl">Train vs Test R² — Overfitting Check</div></div>', unsafe_allow_html=True)
             n_m = len(results)
+            x   = np.arange(n_m)
+            w   = 0.35
+            train_r2s = [results[n]["train"]["r2"] for n in names]
+            test_r2s  = [results[n]["test"]["r2"]  for n in names]
+
+            fig, ax = plt.subplots(figsize=(max(10, 4*n_m), 5), facecolor="#13161e")
+            ax.set_facecolor("#1a1e2b")
+            bars1 = ax.bar(x - w/2, train_r2s, w, label="Train R²",
+                           color="#4C8EDA", alpha=0.85, edgecolor="none")
+            bars2 = ax.bar(x + w/2, test_r2s,  w, label="Test R²",
+                           color="#E8593C", alpha=0.85, edgecolor="none")
+            for bar, val in zip(list(bars1) + list(bars2), train_r2s + test_r2s):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005,
+                        f"{val:.3f}", ha="center", va="bottom",
+                        fontsize=8, color="#e8eaf2")
+            ax.set_xticks(x)
+            ax.set_xticklabels(names, fontsize=10, color="#e8eaf2")
+            ax.set_ylabel("R²", fontsize=9, color="#6b7280")
+            ax.set_ylim(0, 1.15)
+            ax.set_title("Train vs Test R² — Overfitting Check (raw RecommendationCount)",
+                         color="#e8eaf2", fontsize=9, fontfamily="monospace")
+            ax.legend(fontsize=9, framealpha=0.3)
+            ax.tick_params(colors="#6b7280", labelsize=7)
+            for sp in ax.spines.values(): sp.set_color("#252a38")
+            plt.tight_layout()
+            st.pyplot(fig, use_container_width=True)
+            plt.close()
+
+            # Actual vs Predicted (raw counts)
+            st.markdown('<div class="sec"><div class="sec-dot" style="background:#5b8df6"></div>'
+                        '<div class="sec-lbl">Actual vs Predicted — Test Set (raw counts)</div></div>', unsafe_allow_html=True)
             fig, axs = plt.subplots(1, n_m, figsize=(5*n_m, 5), facecolor="#13161e")
             axs = [axs] if n_m == 1 else list(axs)
             for ax, (name, res) in zip(axs, results.items()):
                 ax.set_facecolor("#1a1e2b")
                 col_h = MODEL_COLORS.get(name, "#888")
-                ax.scatter(y_te_c, res["p_te"], alpha=0.2, s=7, color=col_h, edgecolors="none")
-                lo = min(float(y_te_c.min()), float(res["p_te"].min()))
-                hi = max(float(y_te_c.max()), float(res["p_te"].max()))
-                ax.plot([lo, hi], [lo, hi], color="#e8eaf2", lw=1.2, linestyle="--")
-                ax.set_title(f"{name}\nR²={res['test']['r2']:.4f}", color="#e8eaf2", fontsize=9, fontfamily="monospace")
-                ax.set_xlabel("Actual (log)", fontsize=8, color="#6b7280")
-                ax.set_ylabel("Predicted (log)", fontsize=8, color="#6b7280")
+                ax.scatter(y_te_c, np.maximum(res["p_te"], 0),
+                           alpha=0.25, s=8, color=col_h, edgecolors="none")
+                lo = min(float(y_te_c.min()), 0)
+                hi = max(float(y_te_c.max()), float(np.maximum(res["p_te"], 0).max()))
+                ax.plot([lo, hi], [lo, hi], color="#e8eaf2", lw=1.2, linestyle="--",
+                        label="Perfect fit")
+                ax.set_title(f"{name}\nR²={res['test']['r2']:.4f}",
+                             color="#e8eaf2", fontsize=9, fontfamily="monospace")
+                ax.set_xlabel("Actual", fontsize=8, color="#6b7280")
+                ax.set_ylabel("Predicted", fontsize=8, color="#6b7280")
                 ax.tick_params(colors="#6b7280", labelsize=7)
+                ax.legend(fontsize=7, framealpha=0.3)
                 for sp in ax.spines.values(): sp.set_color("#252a38")
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close()
 
-            # Residuals
+            # Residual distribution
             st.markdown('<div class="sec"><div class="sec-dot" style="background:#7F77DD"></div>'
                         '<div class="sec-lbl">Residual Distribution — Test Set</div></div>', unsafe_allow_html=True)
             fig, axs = plt.subplots(1, n_m, figsize=(5*n_m, 4), facecolor="#13161e")
@@ -1401,9 +1410,13 @@ with tab_compare:
                 col_h = MODEL_COLORS.get(name, "#888")
                 resid = np.array(y_te_c) - res["p_te"]
                 ax.hist(resid, bins=60, color=col_h, alpha=0.85, edgecolor="none")
-                ax.axvline(0,            color="#e8eaf2", lw=1.2, linestyle="--", label="zero")
-                ax.axvline(resid.mean(), color="#5bf6c8", lw=1.0, label=f"mean={resid.mean():.3f}")
-                ax.set_title(name, color="#e8eaf2", fontsize=9, fontfamily="monospace")
+                ax.axvline(0,             color="#e8eaf2", lw=1.2, linestyle="--", label="zero")
+                ax.axvline(resid.mean(),  color="#5bf6c8", lw=1.0,
+                           label=f"mean={resid.mean():.1f}")
+                ax.axvline( np.std(resid), color="#6b7280", lw=0.8, linestyle=":", label="+1 std")
+                ax.axvline(-np.std(resid), color="#6b7280", lw=0.8, linestyle=":")
+                ax.set_title(f"{name}\nstd={np.std(resid):.2f}",
+                             color="#e8eaf2", fontsize=9, fontfamily="monospace")
                 ax.set_xlabel("Residual", fontsize=8, color="#6b7280")
                 ax.legend(fontsize=7, framealpha=0.3)
                 ax.tick_params(colors="#6b7280", labelsize=7)
