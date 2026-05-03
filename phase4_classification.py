@@ -109,6 +109,54 @@ models = {
         ))
     ])
 }
+def hierarchical_predict(X_train, y_train, X_test, y_test):
+
+    # ── Stage 1: Low vs Rest ──
+    y_train_s1 = (y_train != 0).astype(int)
+    y_test_s1  = (y_test  != 0).astype(int)
+
+    stage1 = LGBMClassifier(
+        n_estimators=300,
+        learning_rate=0.05,
+        class_weight='balanced',
+        random_state=42
+    )
+    stage1.fit(X_train, y_train_s1)
+
+    # ── Stage 2: Medium vs High ──
+    mask_train = y_train != 0
+    mask_test  = y_test  != 0
+
+    X_train_s2 = X_train[mask_train]
+    y_train_s2 = y_train[mask_train]
+
+    X_test_s2  = X_test[mask_test]
+    y_test_s2  = y_test[mask_test]
+
+    y_train_s2 = (y_train_s2 == 2).astype(int)
+    y_test_s2  = (y_test_s2  == 2).astype(int)
+
+    stage2 = LGBMClassifier(
+        n_estimators=300,
+        learning_rate=0.05,
+        class_weight='balanced',
+        random_state=42
+    )
+    stage2.fit(X_train_s2, y_train_s2)
+
+    # ── Prediction ──
+    final_preds = []
+
+    for i in range(len(X_test)):
+        pred_s1 = stage1.predict(X_test.iloc[[i]])[0]
+
+        if pred_s1 == 0:
+            final_preds.append(0)  # Low
+        else:
+            pred_s2 = stage2.predict(X_test.iloc[[i]])[0]
+            final_preds.append(1 if pred_s2 == 0 else 2)
+
+    return np.array(final_preds), stage1, stage2
 
 # =========================================================
 # TRAIN MODELS
@@ -116,6 +164,37 @@ models = {
 results = []
 
 print("\nTraining Models...\n")
+
+
+print("\n── Hierarchical (2-Stage) ──")
+
+t0 = time.time()
+y_pred_h, stage1_model, stage2_model = hierarchical_predict(
+    X_train, y_train, X_test, y_test
+)
+train_time = time.time() - t0
+
+t0 = time.time()
+_ = y_pred_h  # already predicted
+test_time = time.time() - t0
+
+acc = accuracy_score(y_test, y_pred_h)
+f1  = f1_score(y_test, y_pred_h, average='macro')
+
+print(f"  Accuracy : {acc:.4f}")
+print(f"  F1-macro: {f1:.4f}")
+
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred_h))
+
+results.append([
+    "Hierarchical (2-Stage)",
+    acc,
+    f1,
+    train_time,
+    test_time
+])
+
 
 for name, model in models.items():
 

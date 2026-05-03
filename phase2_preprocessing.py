@@ -74,7 +74,7 @@ mi_df = pd.DataFrame({
     'MI': mi_scores
 }).sort_values('MI', ascending=False)
 
-MI_THRESHOLD = 0.005
+MI_THRESHOLD = 0.002
 selected_features = mi_df[mi_df['MI'] > MI_THRESHOLD]['feature'].tolist()
 
 print(f"Selected features: {len(selected_features)}")
