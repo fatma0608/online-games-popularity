@@ -7,7 +7,6 @@ import os
 import joblib
 import warnings
 warnings.filterwarnings('ignore')
-
 from sklearn.linear_model        import LogisticRegression
 from sklearn.ensemble            import RandomForestClassifier
 from sklearn.svm                 import SVC
@@ -26,29 +25,69 @@ print("="*60)
 print("LOADING DATA")
 print("="*60)
 
+from imblearn.over_sampling import SMOTE
+
+# train.csv = already SMOTE-resampled (saved by preprocessing)
+# test.csv  = original test rows (no SMOTE)
 train_df = pd.read_csv('./data/processed/train.csv')
 test_df  = pd.read_csv('./data/processed/test.csv')
 le       = joblib.load('./models/label_encoder.pkl')
+
+TARGET    = 'GamePopularity_enc'
+DROP_COLS = ['GamePopularity', 'GamePopularity_enc']
 
 nlp_train_path = './data/processed/nlp_features_train.csv'
 nlp_test_path  = './data/processed/nlp_features_test.csv'
 
 if os.path.exists(nlp_train_path) and os.path.exists(nlp_test_path):
-    nlp_train = pd.read_csv(nlp_train_path)
-    nlp_test  = pd.read_csv(nlp_test_path)
-    test_df = pd.concat([test_df.reset_index(drop=True),
-                         nlp_test.reset_index(drop=True)], axis=1)
-    print(f"NLP features merged into test set — test shape: {test_df.shape}")
+    nlp_train = pd.read_csv(nlp_train_path)   # 9085 rows — pre-SMOTE originals
+    nlp_test  = pd.read_csv(nlp_test_path)    # 2272 rows
+
+    # ── FIXED: no double SMOTE ─────────────────────────────────────
+    # preprocessing already ran SMOTE and saved train.csv (13526 rows).
+    # We cannot merge 9085-row NLP into 13526-row train directly.
+    # Correct approach: load pre-SMOTE originals from original_train.csv
+    # (saved by preprocessing), merge NLP, then run SMOTE once here.
+    # train.csv is discarded — SMOTE runs only once in this file.
+
+    original_train = pd.read_csv('./data/processed/original_train.csv')
+
+    X_orig = original_train.drop(columns=DROP_COLS, errors='ignore')
+    y_orig = original_train[TARGET]
+
+    # Merge NLP into original pre-SMOTE rows (both are 9085 rows — safe)
+    X_orig = pd.concat([
+        X_orig.reset_index(drop=True),
+        nlp_train.reset_index(drop=True)
+    ], axis=1)
+
+    # Run SMOTE once on original + NLP combined
+    sm = SMOTE(
+        sampling_strategy={2: 2500, 0: 3500, 1: 7526},
+        k_neighbors=5, random_state=42
+    )
+    X_res, y_res = sm.fit_resample(X_orig, y_orig)
+    X_train = pd.DataFrame(X_res, columns=X_orig.columns)
+    y_train = pd.Series(y_res)
+
+    # Merge NLP into test set
+    X_test = test_df.drop(columns=DROP_COLS, errors='ignore')
+    y_test = test_df[TARGET]
+    X_test = pd.concat([
+        X_test.reset_index(drop=True),
+        nlp_test.reset_index(drop=True)
+    ], axis=1)
+
+    print(f"NLP merged into train — SMOTE applied once on original rows")
+    print(f"X_train (SMOTE + NLP) : {X_train.shape}")
+    print(f"X_test  (with NLP)    : {X_test.shape}")
+
 else:
     print("NLP features not found — running without them.")
-
-TARGET    = 'GamePopularity_enc'
-DROP_COLS = ['GamePopularity', 'GamePopularity_enc']
-
-X_train = train_df.drop(columns=DROP_COLS, errors='ignore')
-y_train = train_df[TARGET]
-X_test  = test_df.drop(columns=DROP_COLS, errors='ignore')
-y_test  = test_df[TARGET]
+    X_train = train_df.drop(columns=DROP_COLS, errors='ignore')
+    y_train = train_df[TARGET]
+    X_test  = test_df.drop(columns=DROP_COLS, errors='ignore')
+    y_test  = test_df[TARGET]
 
 shared_cols = [c for c in X_train.columns if c in X_test.columns]
 X_train = X_train[shared_cols]

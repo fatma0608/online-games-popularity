@@ -170,9 +170,29 @@ df['metacritic_x_age']   = df['has_metacritic'] * df['game_age_days']
 df['owners_per_achievement'] = df['SteamSpyOwners_log'] / (df['AchievementCount'] + 1)
 df['dlc_x_owners'] = np.log1p(df['DLCCount']) * df['SteamSpyOwners_log']
 df['movie_x_owners']  = df['MovieCount'] * df['SteamSpyOwners_log']
+
+# ── FIX 2: tier/bucket features to help models find the "Medium band" ──
+# Medium games have ~23x more owners than Low but ~4x less than High.
+# Bucketing captures this ordinal structure directly.
+df['owners_tier'] = pd.cut(
+    df['SteamSpyOwners_log'],
+    bins=5, labels=[0, 1, 2, 3, 4]
+).astype(int)
+
+df['achievement_tier'] = pd.cut(
+    df['AchievementCount'],
+    bins=[-1, 0, 20, 100, np.inf],
+    labels=[0, 1, 2, 3]
+).astype(int)
+
+df['players_tier'] = pd.cut(
+    df['SteamSpyPlayersEstimate_log'],
+    bins=5, labels=[0, 1, 2, 3, 4]
+).astype(int)
 CONTINUOUS_COLS += [
     'price_per_language', 'metacritic_x_age',
     'owners_per_achievement', 'dlc_x_owners', 'movie_x_owners',
+    'owners_tier', 'achievement_tier', 'players_tier',   # ← FIX 2 features
 ]
 CONTINUOUS_COLS = [c for c in CONTINUOUS_COLS if c in df.columns]
 
@@ -307,7 +327,12 @@ def plot_boxplots(before_df, after_df, cols, title, filename):
 # ══════════════════════════════════════════════════════════════════
 NO_IQR_COLS = [
     'RequiredAge', 'DemoCount', 'DeveloperCount',
-    'DLCCount', 'PackageCount', 'PublisherCount'
+    'DLCCount', 'PackageCount', 'PublisherCount',
+    # ← FIX 1: skip IQR on SteamSpy raw columns — IQR upper bound is
+    # calibrated to Low's distribution and clips 43-47% of Medium samples.
+    # Log versions (_log) already capture these properly.
+    'SteamSpyOwners', 'SteamSpyOwnersVariance',
+    'SteamSpyPlayersEstimate', 'SteamSpyPlayersVariance',
 ]
 print("\n" + "="*60)
 print("STEP 1: IQR Outlier Capping")
@@ -409,7 +434,20 @@ print("Class distribution BEFORE SMOTE:")
 for cls, name in zip(le.transform(le.classes_), le.classes_):
     print(f"  {name}: {(y_train == cls).sum()}")
 
-sm = SMOTE(random_state=42, k_neighbors=5)
+sm = SMOTE(
+    # ← FIX 3: controlled oversampling instead of full equalization.
+    # Full equalization (all → 7526) forces 521 Medium samples to generate
+    # 7005 synthetic rows (13.4× multiplication) — too many fake samples.
+    # This targeted strategy: Medium → 2500 (4.8×), High → 3500 (3.4×),
+    # Low stays majority at 7526. Better quality synthetic samples.
+    sampling_strategy={
+        2: 2500,   # Medium: 521 → 2500
+        0: 3500,   # High:  1037 → 3500
+        1: 7526,   # Low: keep as majority
+    },
+    k_neighbors=5,
+    random_state=42
+)
 X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
 X_train_res = pd.DataFrame(X_train_res, columns=X_train.columns)
 y_train_res = pd.Series(y_train_res)
@@ -488,6 +526,12 @@ train_df = X_train_res.copy()
 train_df['GamePopularity'] = le.inverse_transform(y_train_res.values)
 train_df['GamePopularity_enc'] = y_train_res.values
 
+# Save original pre-SMOTE training data — used by classification.py
+# to merge NLP features before running SMOTE once (avoids double SMOTE)
+original_train_df = X_train.copy()
+original_train_df['GamePopularity'] = le.inverse_transform(y_train.values)
+original_train_df['GamePopularity_enc'] = y_train.values
+
 # Save original (non-SMOTE) test data
 test_df = X_test.copy()
 test_df['GamePopularity'] = le.inverse_transform(y_test.values)
@@ -495,9 +539,11 @@ test_df['GamePopularity_enc'] = y_test.values
 
 train_df.to_csv('./data/processed/train.csv', index=False)
 test_df.to_csv('./data/processed/test.csv',   index=False)
+original_train_df.to_csv('./data/processed/original_train.csv', index=False)
 
-print(f"  Saved: ./data/processed/train.csv  → shape {train_df.shape}")
-print(f"  Saved: ./data/processed/test.csv   → shape {test_df.shape}")
+print(f"  Saved: ./data/processed/train.csv          → shape {train_df.shape}  (SMOTE resampled)")
+print(f"  Saved: ./data/processed/original_train.csv → shape {original_train_df.shape}  (pre-SMOTE originals)")
+print(f"  Saved: ./data/processed/test.csv           → shape {test_df.shape}")
 
 # ══════════════════════════════════════════════════════════════════
 # SAVE MODELS / TRANSFORMERS
