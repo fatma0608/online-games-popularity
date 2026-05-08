@@ -742,7 +742,6 @@ with tab_predict:
         st.markdown(
             "<div class='tip'>"
             "Upload a CSV file with the same columns as <code>train_data.csv</code> (raw, before preprocessing). "
-            "If the file has multiple rows, the <b>first data row</b> is used."
             "</div>",
             unsafe_allow_html=True,
         )
@@ -751,13 +750,12 @@ with tab_predict:
             try:
                 df_up = pd.read_csv(uploaded)
                 st.success(f"File loaded · {df_up.shape[0]} rows · {df_up.shape[1]} columns")
-                if df_up.shape[0] > 1:
-                    st.info(f"Multiple rows detected — using row 1 of {df_up.shape[0]}.")
+               
                 st.dataframe(df_up.head(3), use_container_width=True)
                 _, btn_col3, _ = st.columns([2, 2, 2])
                 with btn_col3:
                     if st.button("🎯  PREDICT FROM FILE", key="btn_upload"):
-                        raw_input = df_up.iloc[0].to_dict()
+                        raw_input = df_up
             except Exception as e:
                 st.error(f"Could not read file: {e}")
 
@@ -808,7 +806,13 @@ with tab_predict:
 
             _render_steps(_steps)
 
-            feat_df = _preprocess_row(raw_input, tfidf_vecs, svd_mods, scaler)
+            if isinstance(raw_input, pd.DataFrame):
+               feat_df = pd.concat([
+                  _preprocess_row(row.to_dict(), tfidf_vecs, svd_mods, scaler)
+                  for _, row in raw_input.iterrows()
+               ], ignore_index=True)
+            else:
+               feat_df = _preprocess_row(raw_input, tfidf_vecs, svd_mods, scaler)
             _steps.append((f"Feature vector assembled — {feat_df.shape[1]} columns before alignment", "done"))
             _render_steps(_steps)
 
@@ -817,8 +821,26 @@ with tab_predict:
             _render_steps(_steps)
 
             # Raw count prediction — no expm1 needed (regression.py trains on raw counts)
-            raw_pred = int(np.round(float(pred_model.predict(X_new)[0])))
-            raw_pred = max(0, raw_pred)   # clamp negative edge cases
+            preds = np.maximum(np.round(pred_model.predict(X_new)).astype(int), 0)
+            if len(preds) == 1:
+              raw_pred = int(preds[0])
+            else:
+              raw_pred = int(preds[0])
+              result_df = pd.DataFrame({"Row": range(1, len(preds)+1), "Predicted_Recommendations": preds})
+              st.dataframe(result_df, use_container_width=True)
+
+              if isinstance(raw_input, pd.DataFrame) and TARGET in raw_input.columns:
+                 actual = raw_input[TARGET].values
+                 r2 = r2_score(actual, preds)
+                 st.markdown(
+                     f"<div style='background:#13161e;border:1px solid #5bf6c8;border-radius:10px;"
+                     f"padding:16px 20px;margin-top:12px;text-align:center'>"
+                     f"<div style='font-size:11px;color:#6b7280;font-family:monospace'>R² Score vs Actual</div>"
+                     f"<div style='font-size:36px;font-weight:700;color:#5bf6c8;font-family:monospace'>{r2:.4f}</div>"
+                     f"</div>",
+                     unsafe_allow_html=True,
+                 )
+
             _steps.append((f"Prediction complete: {raw_pred:,} raw recommendations", "done"))
             _render_steps(_steps)
             success = True
