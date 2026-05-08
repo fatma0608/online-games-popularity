@@ -16,6 +16,14 @@ warnings.filterwarnings('ignore')
 # LOAD DATA
 # ══════════════════════════════════════════════════════════════════
 df = pd.read_csv('./data/raw/train_data.csv')
+
+# ── Drop duplicate rows before any processing ────────────────────
+n_before = len(df)
+df.drop_duplicates(inplace=True)
+df.reset_index(drop=True, inplace=True)
+n_dropped = n_before - len(df)
+print(f"Dropped {n_dropped} duplicate rows  ({n_before} → {len(df)})")
+
 print(df.head())
 
 missing_val = pd.DataFrame({
@@ -549,13 +557,15 @@ print(f"  Saved: ./data/processed/test.csv           → shape {test_df.shape}")
 # SAVE MODELS / TRANSFORMERS
 # ══════════════════════════════════════════════════════════════════
 os.makedirs('./models', exist_ok=True)
-joblib.dump(scaler,      './models/scaler.pkl')
-joblib.dump(le,          './models/label_encoder.pkl')   # ← NEW — needed for test script
-joblib.dump(iqr_bounds,  './models/iqr_bounds.pkl')      # ← NEW — needed for test script
+joblib.dump(scaler,           './models/scaler.pkl')
+joblib.dump(le,               './models/label_encoder.pkl')
+joblib.dump(iqr_bounds,       './models/iqr_bounds.pkl')
+joblib.dump(cont_feat_cols,   './models/scaler_columns.pkl')  # ← NEW: exact columns scaler was fit on
 
 print("Saved scaler         → ./models/scaler.pkl")
 print("Saved label encoder  → ./models/label_encoder.pkl")
 print("Saved IQR bounds     → ./models/iqr_bounds.pkl")
+print("Saved scaler columns → ./models/scaler_columns.pkl")
 
 print("\n" + "="*60)
 print("FINAL DATASET SHAPES")

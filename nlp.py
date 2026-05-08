@@ -28,6 +28,14 @@ COLORS = ['#4C8EDA', '#E8593C', '#1D9E75', '#7F77DD', '#EF9F27',
 # ─────────────────────────────────────────────
 df = pd.read_csv('./data/raw/train_data.csv')
 
+# ── Must mirror Preprocessing_m2.py exactly ──────────────────────
+# Preprocessing drops duplicates and resets the index before saving
+# idx_train / idx_test. Without this, the index sizes won't match.
+n_before = len(df)
+df.drop_duplicates(inplace=True)
+df.reset_index(drop=True, inplace=True)
+print(f"Dropped {n_before - len(df)} duplicate rows  ({n_before} → {len(df)})")
+
 TEXT_COLS = {
     'about':            'AboutText',
     'short':            'ShortDescrip',
