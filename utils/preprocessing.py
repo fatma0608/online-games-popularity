@@ -296,8 +296,13 @@ for col in cont_feat_cols:
     n_before = ((X_train[col] < lower) | (X_train[col] > upper)).sum()
     X_train[col] = X_train[col].clip(lower, upper)
     X_test[col]  = X_test[col].clip(lower, upper)
+    iqr_bounds[col] = (lower, upper)   # <-- collect bounds
     print(f"  {col:45s}  bounds=[{lower:10.2f}, {upper:10.2f}]  clipped={n_before}")
-
+    # save iqr bounds
+os.makedirs('./models', exist_ok=True)
+joblib.dump(iqr_bounds, './models/iqr_bounds.pkl')
+print(f"\nSaved IQR bounds for {len(iqr_bounds)} columns → ./models/iqr_bounds.pkl")
+ 
 for col in NO_IQR_COLS:
     X_train[col] = np.log1p(X_train[col])
     X_test[col]  = np.log1p(X_test[col])

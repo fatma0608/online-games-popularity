@@ -230,6 +230,12 @@ def _load_scaler():
         return None
     return joblib.load(sp)
 
+@st.cache_resource
+def _load_iqr_bounds():
+    path = os.path.join(MODELS_DIR, "iqr_bounds.pkl")
+    if not os.path.exists(path):
+        return None
+    return joblib.load(path)
 
 @st.cache_resource
 def _load_model(name):
@@ -362,6 +368,8 @@ def _preprocess_row(raw: dict, tfidf_vecs, svd_mods, scaler) -> pd.DataFrame:
 
     ach_count   = flt("AchievementCount", 0)
     movie_count = flt("MovieCount",       0)
+    iqr_bounds = joblib.load("./models/iqr_bounds.pkl")
+
 
     # ── 6. Interaction features ───────────────────────────────
     price_per_language     = price_final / (num_languages + 1)
@@ -425,7 +433,22 @@ def _preprocess_row(raw: dict, tfidf_vecs, svd_mods, scaler) -> pd.DataFrame:
         row_dict[bf] = flt(bf, 0.0)
 
     feat_df = pd.DataFrame([row_dict])
+    # ── 8. IQR clipping ─────────────────────────────
+    if iqr_bounds is not None:
+        for col, bounds in iqr_bounds.items():
 
+            if col in feat_df.columns:
+
+                # if saved as dict
+                if isinstance(bounds, dict):
+                    lower = bounds["lower"]
+                    upper = bounds["upper"]
+
+                # if saved as tuple/list
+                else:
+                    lower, upper = bounds
+
+                feat_df[col] = feat_df[col].clip(lower=lower, upper=upper)
     # ── 8. Scale continuous features (if scaler available) ────
     if scaler is not None:
         scaler_cols = [c for c in scaler.feature_names_in_ if c in feat_df.columns] \
@@ -537,6 +560,7 @@ div[data-testid="stTextArea"] textarea{
 # ─────────────────────────────────────────────────────────────────
 tfidf_vecs, svd_mods = _load_nlp_models()
 scaler               = _load_scaler()
+iqr_bounds           = _load_iqr_bounds()
 nlp_ok               = tfidf_vecs is not None
 scaler_ok            = scaler is not None
 saved_models         = [n for n in MODEL_FILES if _model_exists(n)]
@@ -798,7 +822,10 @@ with tab_predict:
                 _steps.append(("TF-IDF + LSA applied to text fields", "done"))
             else:
                 _steps.append(("NLP models missing — LSA features set to 0", "warn"))
-
+            if iqr_bounds is not None:
+                _steps.append(("IQR clipping applied using saved iqr_bounds.pkl", "done"))
+            else:
+                _steps.append(("IQR bounds not found — clipping skipped", "warn"))
             if scaler_ok:
                 _steps.append(("StandardScaler loaded — continuous features will be scaled", "done"))
             else:
@@ -826,20 +853,41 @@ with tab_predict:
               raw_pred = int(preds[0])
             else:
               raw_pred = int(preds[0])
-              result_df = pd.DataFrame({"Row": range(1, len(preds)+1), "Predicted_Recommendations": preds})
+              result_df = pd.DataFrame({"Row": range(1, len(preds)+1), "Predicted_Recommendations": preds})           
               st.dataframe(result_df, use_container_width=True)
 
+              csv_data = result_df.to_csv(index=False).encode("utf-8")
+
+              st.download_button(
+                label="⬇ Download Predictions CSV",
+                data=csv_data,
+                file_name="predictions.csv",
+                mime="text/csv",
+              )
+
               if isinstance(raw_input, pd.DataFrame) and TARGET in raw_input.columns:
-                 actual = raw_input[TARGET].values
-                 r2 = r2_score(actual, preds)
-                 st.markdown(
-                     f"<div style='background:#13161e;border:1px solid #5bf6c8;border-radius:10px;"
-                     f"padding:16px 20px;margin-top:12px;text-align:center'>"
-                     f"<div style='font-size:11px;color:#6b7280;font-family:monospace'>R² Score vs Actual</div>"
-                     f"<div style='font-size:36px;font-weight:700;color:#5bf6c8;font-family:monospace'>{r2:.4f}</div>"
-                     f"</div>",
-                     unsafe_allow_html=True,
-                 )
+
+                    actual = raw_input[TARGET].values
+
+                    r2   = r2_score(actual, preds)
+                    mse  = mean_squared_error(actual, preds)
+                    rmse = np.sqrt(mse)
+                    mae  = mean_absolute_error(actual, preds)
+
+                    m1, m2, m3, m4 = st.columns(4)
+
+                    m1.metric("R² Score", f"{r2:.4f}")
+                    m2.metric("MSE", f"{mse:,.2f}")
+                    m3.metric("RMSE", f"{rmse:,.2f}")
+                    m4.metric("MAE", f"{mae:,.2f}")
+                    st.markdown(
+                        f"<div style='background:#13161e;border:1px solid #5bf6c8;border-radius:10px;"
+                        f"padding:16px 20px;margin-top:12px;text-align:center'>"
+                        f"<div style='font-size:11px;color:#6b7280;font-family:monospace'>R² Score vs Actual</div>"
+                        f"<div style='font-size:36px;font-weight:700;color:#5bf6c8;font-family:monospace'>{r2:.4f}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
 
             _steps.append((f"Prediction complete: {raw_pred:,} raw recommendations", "done"))
             _render_steps(_steps)
