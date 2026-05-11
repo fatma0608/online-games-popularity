@@ -119,9 +119,12 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     st.markdown('<div class="sidebar-label">Navigation</div>', unsafe_allow_html=True)
-    st.page_link("app.py",                      label="⬡  Dashboard")
-    st.page_link("pages/preprocessing_page.py", label="⬡  Preprocessing")
 
+    st.page_link("app.py",                       label="⬡  Dashboard")
+    st.page_link("pages/preprocessing_page.py", label="⬡  Preprocessing")
+    st.page_link("pages/model_page.py",         label="⬡  Models")
+    st.page_link("pages/preprocessing_train.py", label="⚙️ Train Pipeline (Upload)")
+    st.page_link("pages/test_inference.py", label="🎯 Inference (Test Upload)")
     st.markdown("---")
     st.markdown('<div class="sidebar-label">Data Source</div>', unsafe_allow_html=True)
     if source == "processed":
