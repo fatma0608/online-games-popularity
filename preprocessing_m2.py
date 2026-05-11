@@ -375,19 +375,19 @@ for col in NO_IQR_COLS:
 low_var_cols = [col for col in X_train.columns if X_train[col].var() < 0.001]
 print("Low variance columns:", low_var_cols)
 
-os.makedirs('./plots', exist_ok=True)
+os.makedirs('./visualizations', exist_ok=True)
 print("\nPlotting outlier capping distributions …")
 plot_distributions(
     X_train_raw, X_train, PLOT_COLS_SAMPLE,
     title="Outlier Capping — Distribution: Before vs After",
-    filename="./plots/outlier_distributions.png",
+    filename="./visualizations/outlier_distributions.png",
     before_label="Raw", after_label="IQR Capped",
 )
 print("Plotting outlier capping box plots …")
 plot_boxplots(
     X_train_raw, X_train, PLOT_COLS_SAMPLE,
     title="Outlier Capping — Box Plots: Before vs After",
-    filename="./plots/outlier_boxplots.png",
+    filename="./visualizations/outlier_boxplots.png",
 )
 
 # ISOLATION FOREST
@@ -420,7 +420,7 @@ print("\nPlotting scaling distributions …")
 plot_distributions(
     X_train_precap, X_train, PLOT_COLS_SAMPLE,
     title="Standard Scaling — Distribution: Before vs After",
-    filename="./plots/scaling_distributions.png",
+    filename="./visualizations/scaling_distributions.png",
     before_label="IQR Capped", after_label="Standardized",
     color_before='#1D9E75', color_after='#7F77DD',
 )
@@ -428,7 +428,7 @@ print("Plotting scaling box plots …")
 plot_boxplots(
     X_train_precap, X_train, PLOT_COLS_SAMPLE,
     title="Standard Scaling — Box Plots: Before vs After",
-    filename="./plots/scaling_boxplots.png",
+    filename="./visualizations/scaling_boxplots.png",
 )
 
 # ══════════════════════════════════════════════════════════════════
@@ -486,7 +486,7 @@ plt.suptitle('Class Distribution — Before vs After SMOTE', fontsize=13, fontwe
 plt.tight_layout()
 plt.savefig('./visualizations/smote_class_distribution.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/smote_class_distribution.png")
+print("Saved: ./visualizations/smote_class_distribution.png")
 
 # ══════════════════════════════════════════════════════════════════
 # STEP 4 — MUTUAL INFORMATION (classification)          ← CHANGED
@@ -517,7 +517,7 @@ plt.tight_layout()
 plt.savefig('./visualizations/mutual_information_classif.png', dpi=130,
             bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/mutual_information_classif.png")
+print("Saved: ./visualizations/mutual_information_classif.png")
 
 TOP_FEATURES = mi_df.head(5)['feature'].tolist()
 print("\nTop 5 features by MI:", TOP_FEATURES)
@@ -549,23 +549,23 @@ train_df.to_csv('./dataset/processed/train.csv', index=False)
 test_df.to_csv('./dataset/processed/test.csv',   index=False)
 original_train_df.to_csv('./dataset/processed/original_train.csv', index=False)
 
-print(f"  Saved: ./data/processed/train.csv          → shape {train_df.shape}  (SMOTE resampled)")
-print(f"  Saved: ./data/processed/original_train.csv → shape {original_train_df.shape}  (pre-SMOTE originals)")
-print(f"  Saved: ./data/processed/test.csv           → shape {test_df.shape}")
+print(f"  Saved: ./dataset/processed/train.csv          → shape {train_df.shape}  (SMOTE resampled)")
+print(f"  Saved: ./dataset/processed/original_train.csv → shape {original_train_df.shape}  (pre-SMOTE originals)")
+print(f"  Saved: ./dataset/processed/test.csv           → shape {test_df.shape}")
 
 # ══════════════════════════════════════════════════════════════════
 # SAVE MODELS / TRANSFORMERS
 # ══════════════════════════════════════════════════════════════════
-os.makedirs('./models', exist_ok=True)
+os.makedirs('./trained_models', exist_ok=True)
 joblib.dump(scaler,           './trained_models/scaler.pkl')
 joblib.dump(le,               './trained_models/label_encoder.pkl')
 joblib.dump(iqr_bounds,       './trained_models/iqr_bounds.pkl')
 joblib.dump(cont_feat_cols,   './trained_models/scaler_columns.pkl')  # ← NEW: exact columns scaler was fit on
 
-print("Saved scaler         → ./models/scaler.pkl")
-print("Saved label encoder  → ./models/label_encoder.pkl")
-print("Saved IQR bounds     → ./models/iqr_bounds.pkl")
-print("Saved scaler columns → ./models/scaler_columns.pkl")
+print("Saved scaler         → ./trained_models/scaler.pkl")
+print("Saved label encoder  → ./trained_models/label_encoder.pkl")
+print("Saved IQR bounds     → ./trained_models/iqr_bounds.pkl")
+print("Saved scaler columns → ./trained_models/scaler_columns.pkl")
 
 print("\n" + "="*60)
 print("FINAL DATASET SHAPES")
