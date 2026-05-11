@@ -26,29 +26,29 @@ import joblib
 from sklearn.metrics import accuracy_score, f1_score
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-RAW_DATA_PATH        = './data/raw/train_data.csv'
-TRAIN_CSV            = './data/processed/train.csv'
-TEST_CSV             = './data/processed/test.csv'
-ORIGINAL_TRAIN_CSV   = './data/processed/original_train.csv'
-IDX_TRAIN_PATH       = './data/processed/idx_train.npy'
-IDX_TEST_PATH        = './data/processed/idx_test.npy'
-NLP_TRAIN_CSV        = './data/processed/nlp_features_train.csv'
-NLP_TEST_CSV         = './data/processed/nlp_features_test.csv'
+RAW_DATA_PATH        = './dataset/raw/train_data.csv'
+TRAIN_CSV            = './dataset/processed/train.csv'
+TEST_CSV             = './dataset/processed/test.csv'
+ORIGINAL_TRAIN_CSV   = './dataset/processed/original_train.csv'
+IDX_TRAIN_PATH       = './dataset/processed/idx_train.npy'
+IDX_TEST_PATH        = './dataset/processed/idx_test.npy'
+NLP_TRAIN_CSV        = './dataset/processed/nlp_features_train.csv'
+NLP_TEST_CSV         = './dataset/processed/nlp_features_test.csv'
 
-SCALER_PATH          = './models/scaler.pkl'
-IQR_BOUNDS_PATH      = './models/iqr_bounds.pkl'
-LABEL_ENCODER_PATH   = './models/label_encoder.pkl'
-TFIDF_PATH           = './models/tfidf_vectorizers.pkl'
-SVD_PATH             = './models/svd_models.pkl'
+SCALER_PATH          = './trained_models/scaler.pkl'
+IQR_BOUNDS_PATH      = './trained_models/iqr_bounds.pkl'
+LABEL_ENCODER_PATH   = './trained_models/label_encoder.pkl'
+TFIDF_PATH           = './trained_models/tfidf_vectorizers.pkl'
+SVD_PATH             = './trained_models/svd_models.pkl'
 
-SCALER_COLUMNS_PATH  = './models/scaler_columns.pkl'
+SCALER_COLUMNS_PATH  = './trained_models/scaler_columns.pkl'
 MODEL_PATHS={
-    'Logistic Regression': './models/logistic_regression.pkl',
-    'Random Forest':       './models/random_forest.pkl',
-    'SVM':                 './models/svm.pkl',
-    'XGBoost':             './models/xgboost.pkl',
-    'LightGBM':            './models/lightgbm.pkl',
-    'CatBoost':            './models/catboost.pkl',
+    'Logistic Regression': './trained_models/logistic_regression.pkl',
+    'Random Forest':       './trained_models/random_forest.pkl',
+    'SVM':                 './trained_models/svm.pkl',
+    'XGBoost':             './trained_models/xgboost.pkl',
+    'LightGBM':            './trained_models/lightgbm.pkl',
+    'CatBoost':            './trained_models/catboost.pkl',
 }
 
 TARGET          = 'GamePopularity_enc'
@@ -265,7 +265,7 @@ class TestProcessedDataFiles:
         X = test_df.drop(columns=DROP_COLS, errors='ignore')
 
         # Use the exact column list the scaler was fitted on (saved by Preprocessing_m2.py)
-        scaler_cols_path = './models/scaler_columns.pkl'
+        scaler_cols_path = './trained_models/scaler_columns.pkl'
         if os.path.exists(scaler_cols_path):
             fitted_cols = joblib.load(scaler_cols_path)
         else:

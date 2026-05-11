@@ -15,7 +15,7 @@ warnings.filterwarnings('ignore')
 # ══════════════════════════════════════════════════════════════════
 # LOAD DATA
 # ══════════════════════════════════════════════════════════════════
-df = pd.read_csv('./data/raw/train_data.csv')
+df = pd.read_csv('./dataset/raw/train_data.csv')
 
 # ── Drop duplicate rows before any processing ────────────────────
 n_before = len(df)
@@ -225,9 +225,9 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 
 # Save indices so nlp_m2.py can reproduce the exact same split
-os.makedirs('./data/processed', exist_ok=True)
-np.save('./data/processed/idx_train.npy', X_train.index.values)
-np.save('./data/processed/idx_test.npy',  X_test.index.values)
+os.makedirs('./dataset/processed', exist_ok=True)
+np.save('./dataset/processed/idx_train.npy', X_train.index.values)
+np.save('./dataset/processed/idx_test.npy',  X_test.index.values)
 print(f"\n  Saved split indices → idx_train.npy ({len(X_train.index)}) "
       f"/ idx_test.npy ({len(X_test.index)})")
 
@@ -484,7 +484,7 @@ for ax, (counts, title) in zip(axes, [
     ax.tick_params(labelsize=9)
 plt.suptitle('Class Distribution — Before vs After SMOTE', fontsize=13, fontweight='600', color='#2C2C2A')
 plt.tight_layout()
-plt.savefig('./plots/smote_class_distribution.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/smote_class_distribution.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/smote_class_distribution.png")
 
@@ -514,7 +514,7 @@ ax.set_title('Top 20 Features — Mutual Information with GamePopularity (Classi
 ax.set_xlabel('MI Score', fontsize=9)
 ax.tick_params(labelsize=8)
 plt.tight_layout()
-plt.savefig('./plots/mutual_information_classif.png', dpi=130,
+plt.savefig('./visualizations/mutual_information_classif.png', dpi=130,
             bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/mutual_information_classif.png")
@@ -545,9 +545,9 @@ test_df = X_test.copy()
 test_df['GamePopularity'] = le.inverse_transform(y_test.values)
 test_df['GamePopularity_enc'] = y_test.values
 
-train_df.to_csv('./data/processed/train.csv', index=False)
-test_df.to_csv('./data/processed/test.csv',   index=False)
-original_train_df.to_csv('./data/processed/original_train.csv', index=False)
+train_df.to_csv('./dataset/processed/train.csv', index=False)
+test_df.to_csv('./dataset/processed/test.csv',   index=False)
+original_train_df.to_csv('./dataset/processed/original_train.csv', index=False)
 
 print(f"  Saved: ./data/processed/train.csv          → shape {train_df.shape}  (SMOTE resampled)")
 print(f"  Saved: ./data/processed/original_train.csv → shape {original_train_df.shape}  (pre-SMOTE originals)")
@@ -557,10 +557,10 @@ print(f"  Saved: ./data/processed/test.csv           → shape {test_df.shape}")
 # SAVE MODELS / TRANSFORMERS
 # ══════════════════════════════════════════════════════════════════
 os.makedirs('./models', exist_ok=True)
-joblib.dump(scaler,           './models/scaler.pkl')
-joblib.dump(le,               './models/label_encoder.pkl')
-joblib.dump(iqr_bounds,       './models/iqr_bounds.pkl')
-joblib.dump(cont_feat_cols,   './models/scaler_columns.pkl')  # ← NEW: exact columns scaler was fit on
+joblib.dump(scaler,           './trained_models/scaler.pkl')
+joblib.dump(le,               './trained_models/label_encoder.pkl')
+joblib.dump(iqr_bounds,       './trained_models/iqr_bounds.pkl')
+joblib.dump(cont_feat_cols,   './trained_models/scaler_columns.pkl')  # ← NEW: exact columns scaler was fit on
 
 print("Saved scaler         → ./models/scaler.pkl")
 print("Saved label encoder  → ./models/label_encoder.pkl")

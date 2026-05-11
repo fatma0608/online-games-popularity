@@ -26,7 +26,7 @@ COLORS = ['#4C8EDA', '#E8593C', '#1D9E75', '#7F77DD', '#EF9F27',
 # ─────────────────────────────────────────────
 # LOAD DATA
 # ─────────────────────────────────────────────
-df = pd.read_csv('./data/raw/train_data.csv')
+df = pd.read_csv('./dataset/raw/train_data.csv')
 
 # ── Must mirror Preprocessing_m2.py exactly ──────────────────────
 # Preprocessing drops duplicates and resets the index before saving
@@ -65,8 +65,8 @@ text_df.index = df.index
 # ─────────────────────────────────────────────────────────────────
 # LOAD SPLIT INDICES FROM PREPROCESSING_M2.PY
 # ─────────────────────────────────────────────────────────────────
-idx_train_path = './data/processed/idx_train.npy'
-idx_test_path  = './data/processed/idx_test.npy'
+idx_train_path = './dataset/processed/idx_train.npy'
+idx_test_path  = './dataset/processed/idx_test.npy'
 
 if not os.path.exists(idx_train_path) or not os.path.exists(idx_test_path):
     raise FileNotFoundError(
@@ -132,7 +132,7 @@ for i, (key, col) in enumerate(TEXT_COLS.items()):
     ax.legend(fontsize=7)
 plt.suptitle("Raw Text — Word Count Distributions", fontsize=13, fontweight='600', color='#2C2C2A', y=1.02)
 plt.tight_layout()
-plt.savefig('./plots/plot_nlp_01_raw_word_counts.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/plot_nlp_01_raw_word_counts.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("\nSaved: plot_nlp_01_raw_word_counts.png")
 
@@ -192,7 +192,7 @@ for i, (key, col) in enumerate(TEXT_COLS.items()):
     ax_a.axvline(after_wc.mean(), color='#2C2C2A', linewidth=1, linestyle='--')
 plt.suptitle("Text Cleaning — Word Count Before vs After", fontsize=13, fontweight='600', color='#2C2C2A', y=1.01)
 plt.tight_layout()
-plt.savefig('./plots/plot_nlp_02_cleaning_before_after.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/plot_nlp_02_cleaning_before_after.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: plot_nlp_02_cleaning_before_after.png")
 
@@ -319,7 +319,7 @@ for bar, val in zip(bars, vars_sorted):
     ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
             f'{val:.1f}%', va='center', fontsize=8)
 plt.tight_layout()
-plt.savefig('./plots/plot_nlp_03_lsa_variance_per_field.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/plot_nlp_03_lsa_variance_per_field.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("\nSaved: plot_nlp_03_lsa_variance_per_field.png")
 
@@ -342,7 +342,7 @@ for i, key in enumerate(TFIDF_CONFIG):
     ax.tick_params(axis='x', labelsize=7)
 plt.suptitle("TF-IDF — Top Terms per Field", fontsize=13, fontweight='600', color='#2C2C2A', y=1.02)
 plt.tight_layout()
-plt.savefig('./plots/plot_nlp_04_tfidf_top_terms.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/plot_nlp_04_tfidf_top_terms.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: plot_nlp_04_tfidf_top_terms.png")
 
@@ -375,7 +375,7 @@ for row, key in enumerate(fields_to_plot):
 plt.suptitle("Top Words per LSA Component per Field (red=positive, blue=negative)",
              fontsize=12, fontweight='600', color='#2C2C2A', y=1.01)
 plt.tight_layout()
-plt.savefig('./plots/plot_nlp_05_lsa_components_per_field.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/plot_nlp_05_lsa_components_per_field.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: plot_nlp_05_lsa_components_per_field.png")
 
@@ -401,13 +401,13 @@ for i, col in enumerate(sample_cols):
 plt.suptitle("LSA Feature Distributions — Train vs Test",
              fontsize=12, fontweight='600', color='#2C2C2A', y=1.02)
 plt.tight_layout()
-plt.savefig('./plots/plot_nlp_06_lsa_train_vs_test.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/plot_nlp_06_lsa_train_vs_test.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: plot_nlp_06_lsa_train_vs_test.png")
 
 # ── Plot 7: Top LSA features correlated with target ──────────────
 if 'GamePopularity' in df.columns:
-    le = joblib.load('./models/label_encoder.pkl')
+    le = joblib.load('./trained_models/label_encoder.pkl')
     target_enc = le.transform(df['GamePopularity'].iloc[idx_train].values)
     target_s = pd.Series(target_enc, index=range(len(idx_train)))
 
@@ -428,7 +428,7 @@ if 'GamePopularity' in df.columns:
                  fontsize=10, fontweight='500', color='#2C2C2A')
     ax.tick_params(labelsize=8)
     plt.tight_layout()
-    plt.savefig('./plots/plot_nlp_07_lsa_feature_correlations.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+    plt.savefig('./visualizations/plot_nlp_07_lsa_feature_correlations.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
     plt.close()
     print("Saved: plot_nlp_07_lsa_feature_correlations.png")
 
@@ -454,14 +454,14 @@ if 'GamePopularity' in df.columns:
             if i == 0:
                 ax.legend(fontsize=7)
     plt.tight_layout()
-    plt.savefig('./plots/plot_nlp_08_text_length_by_class.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+    plt.savefig('./visualizations/plot_nlp_08_text_length_by_class.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
     plt.close()
     print("Saved: plot_nlp_08_text_length_by_class.png")
 
 # ─────────────────────────────────────────────────────────────────
 # SAVE
 # ─────────────────────────────────────────────────────────────────
-os.makedirs('./data/processed', exist_ok=True)
+os.makedirs('./dataset/processed', exist_ok=True)
 os.makedirs('./models', exist_ok=True)
 
 # ── FIX: save TWO files ──────────────────────────────────────────
@@ -470,11 +470,11 @@ os.makedirs('./models', exist_ok=True)
 # nlp_features_test.csv   → 2272 rows, aligned with idx_test
 #   Used in classification.py: merge into X_test as before
 
-nlp_train.to_csv('./data/processed/nlp_features_train.csv', index=False)
-nlp_test.to_csv('./data/processed/nlp_features_test.csv',   index=False)
+nlp_train.to_csv('./dataset/processed/nlp_features_train.csv', index=False)
+nlp_test.to_csv('./dataset/processed/nlp_features_test.csv',   index=False)
 
-joblib.dump(tfidf_vectorizers, './models/tfidf_vectorizers.pkl')
-joblib.dump(svd_models,        './models/svd_models.pkl')
+joblib.dump(tfidf_vectorizers, './trained_models/tfidf_vectorizers.pkl')
+joblib.dump(svd_models,        './trained_models/svd_models.pkl')
 
 print("\n" + "="*60)
 print("OUTPUTS SAVED")

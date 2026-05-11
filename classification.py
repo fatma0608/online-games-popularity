@@ -29,15 +29,15 @@ from imblearn.over_sampling import SMOTE
 
 # train.csv = already SMOTE-resampled (saved by preprocessing)
 # test.csv  = original test rows (no SMOTE)
-train_df = pd.read_csv('./data/processed/train.csv')
-test_df  = pd.read_csv('./data/processed/test.csv')
-le       = joblib.load('./models/label_encoder.pkl')
+train_df = pd.read_csv('./dataset/processed/train.csv')
+test_df  = pd.read_csv('./dataset/processed/test.csv')
+le       = joblib.load('./trained_models/label_encoder.pkl')
 
 TARGET    = 'GamePopularity_enc'
 DROP_COLS = ['GamePopularity', 'GamePopularity_enc']
 
-nlp_train_path = './data/processed/nlp_features_train.csv'
-nlp_test_path  = './data/processed/nlp_features_test.csv'
+nlp_train_path = './dataset/processed/nlp_features_train.csv'
+nlp_test_path  = './dataset/processed/nlp_features_test.csv'
 
 if os.path.exists(nlp_train_path) and os.path.exists(nlp_test_path):
     nlp_train = pd.read_csv(nlp_train_path)   # 9085 rows — pre-SMOTE originals
@@ -50,7 +50,7 @@ if os.path.exists(nlp_train_path) and os.path.exists(nlp_test_path):
     # (saved by preprocessing), merge NLP, then run SMOTE once here.
     # train.csv is discarded — SMOTE runs only once in this file.
 
-    original_train = pd.read_csv('./data/processed/original_train.csv')
+    original_train = pd.read_csv('./dataset/processed/original_train.csv')
 
     X_orig = original_train.drop(columns=DROP_COLS, errors='ignore')
     y_orig = original_train[TARGET]
@@ -276,7 +276,7 @@ lr_acc, lr_f1, lr_train_t, lr_test_t, lr_pred = evaluate(
     f"Logistic Regression (C={best_C_lr}, solver={best_solver_lr}, cw={best_cw_lr_label})",
     best_lr, X_train, y_train, X_test, y_test
 )
-joblib.dump(best_lr, './models/logistic_regression.pkl')
+joblib.dump(best_lr, './trained_models/logistic_regression.pkl')
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -333,7 +333,7 @@ rf_acc, rf_f1, rf_train_t, rf_test_t, rf_pred = evaluate(
     f"Random Forest (n={best_n_rf}, depth={best_d_rf}, cw={best_cw_rf_label})",
     best_rf, X_train, y_train, X_test, y_test
 )
-joblib.dump(best_rf, './models/random_forest.pkl')
+joblib.dump(best_rf, './trained_models/random_forest.pkl')
 
 # Feature importance plot
 feat_imp = pd.Series(best_rf.feature_importances_, index=X_train.columns)
@@ -345,7 +345,7 @@ ax.set_title('Random Forest — Top 20 Feature Importances', fontsize=11,
              fontweight='500', color='#2C2C2A')
 ax.set_xlabel('Importance', fontsize=9); ax.tick_params(labelsize=8)
 plt.tight_layout()
-plt.savefig('./plots/rf_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/rf_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/rf_feature_importance.png")
 
@@ -416,7 +416,7 @@ svm_acc, svm_f1, svm_train_t, svm_test_t, svm_pred = evaluate(
     f"SVM (C={best_C_svm}, kernel={best_kernel_svm}, cw={best_cw_svm_label})",
     best_svm, X_train, y_train, X_test, y_test
 )
-joblib.dump(best_svm, './models/svm.pkl')
+joblib.dump(best_svm, './trained_models/svm.pkl')
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -474,7 +474,7 @@ xgb_acc, xgb_f1, xgb_train_t, xgb_test_t, xgb_pred = evaluate(
     best_xgb, X_train, y_train, X_test, y_test,
     fit_params={'sample_weight': _sw_best_xgb}
 )
-joblib.dump(best_xgb, './models/xgboost.pkl')
+joblib.dump(best_xgb, './trained_models/xgboost.pkl')
 
 # XGBoost feature importance plot
 feat_imp_xgb = pd.Series(best_xgb.feature_importances_, index=X_train.columns)
@@ -486,7 +486,7 @@ ax.set_title('XGBoost — Top 20 Feature Importances', fontsize=11,
              fontweight='500', color='#2C2C2A')
 ax.set_xlabel('Importance', fontsize=9); ax.tick_params(labelsize=8)
 plt.tight_layout()
-plt.savefig('./plots/xgb_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/xgb_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/xgb_feature_importance.png")
 
@@ -542,7 +542,7 @@ lgb_acc, lgb_f1, lgb_train_t, lgb_test_t, lgb_pred = evaluate(
     f"LightGBM (n={best_n_lgb}, lr={best_lr_lgb}, cw={best_cw_lgb_label})",
     best_lgb, X_train, y_train, X_test, y_test
 )
-joblib.dump(best_lgb, './models/lightgbm.pkl')
+joblib.dump(best_lgb, './trained_models/lightgbm.pkl')
 
 # LightGBM feature importance plot
 feat_imp_lgb = pd.Series(best_lgb.feature_importances_, index=X_train.columns)
@@ -554,7 +554,7 @@ ax.set_title('LightGBM — Top 20 Feature Importances', fontsize=11,
              fontweight='500', color='#2C2C2A')
 ax.set_xlabel('Importance', fontsize=9); ax.tick_params(labelsize=8)
 plt.tight_layout()
-plt.savefig('./plots/lgb_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/lgb_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/lgb_feature_importance.png")
 
@@ -620,7 +620,7 @@ cat_acc, cat_f1, cat_train_t, cat_test_t, cat_pred = evaluate(
     best_cat, X_train, y_train, X_test, y_test,
     fit_params={'sample_weight': _sw_best_cat}
 )
-joblib.dump(best_cat, './models/catboost.pkl')
+joblib.dump(best_cat, './trained_models/catboost.pkl')
 
 # CatBoost feature importance plot
 feat_imp_cat = pd.Series(best_cat.get_feature_importance(), index=X_train.columns)
@@ -632,7 +632,7 @@ ax.set_title('CatBoost — Top 20 Feature Importances', fontsize=11,
              fontweight='500', color='#2C2C2A')
 ax.set_xlabel('Importance', fontsize=9); ax.tick_params(labelsize=8)
 plt.tight_layout()
-plt.savefig('./plots/cat_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/cat_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/cat_feature_importance.png")
 
@@ -691,7 +691,7 @@ for ax, (ylabel, vals, title) in zip(axes, chart_metrics):
     ax.tick_params(axis='x', labelsize=7, rotation=15)
     ax.tick_params(axis='y', labelsize=8)
 plt.tight_layout()
-plt.savefig('./plots/model_comparison_bars.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/model_comparison_bars.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/model_comparison_bars.png")
 
@@ -711,7 +711,7 @@ ax.set_ylim(0, 1.05)
 ax.tick_params(axis='x', labelsize=8, rotation=10)
 ax.tick_params(axis='y', labelsize=9)
 plt.tight_layout()
-plt.savefig('./plots/model_macro_f1.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/model_macro_f1.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/model_macro_f1.png")
 
@@ -738,7 +738,7 @@ for ax, (name, pred) in zip(axes_flat, all_preds):
     ax.set_title(name, fontsize=10, fontweight='500', color='#2C2C2A')
     ax.tick_params(labelsize=8)
 plt.tight_layout()
-plt.savefig('./plots/confusion_matrices.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/confusion_matrices.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/confusion_matrices.png")
 
@@ -777,7 +777,7 @@ plot_bar_group(axes[2][4], CW_LABELS, lgb_cw_results, "LGB Stage3 — class_weig
 plot_bar_group(axes[2][5], CW_LABELS, cat_cw_results, "CAT Stage3 — class_weight")
 
 plt.tight_layout()
-plt.savefig('./plots/hyperparameter_tuning.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.savefig('./visualizations/hyperparameter_tuning.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./plots/hyperparameter_tuning.png")
 
