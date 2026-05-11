@@ -408,14 +408,14 @@ class TestModelPredictions:
         model = joblib.load(path)
         shared_cols = [c for c in X_test_full.columns
                        if c in X_test_full.columns]
-        preds = np.array(model.predict(X_test_full[shared_cols].values)).flatten()
+        preds = np.array(model.predict(X_test_full[shared_cols])).flatten()
         assert len(preds) == len(y_test), \
             f"{name}: expected {len(y_test)} predictions, got {len(preds)}"
 
     @pytest.mark.parametrize("name,path", MODEL_PATHS.items())
     def test_predictions_are_valid_classes(self, name, path, X_test_full):
         model = joblib.load(path)
-        preds = np.array(model.predict(X_test_full.values)).flatten()
+        preds = np.array(model.predict(X_test_full)).flatten()
         unexpected = set(preds) - VALID_CLASSES
         assert not unexpected, \
             f"{name}: predicted unexpected classes {unexpected}"
@@ -423,14 +423,14 @@ class TestModelPredictions:
     @pytest.mark.parametrize("name,path", MODEL_PATHS.items())
     def test_no_nan_predictions(self, name, path, X_test_full):
         model = joblib.load(path)
-        preds = np.array(model.predict(X_test_full.values)).flatten()
+        preds = np.array(model.predict(X_test_full)).flatten()
         assert not np.any(np.isnan(preds.astype(float))), \
             f"{name}: NaN values found in predictions"
 
     @pytest.mark.parametrize("name,path", MODEL_PATHS.items())
     def test_minimum_accuracy(self, name, path, X_test_full, y_test):
         model = joblib.load(path)
-        preds = np.array(model.predict(X_test_full.values)).flatten()
+        preds = np.array(model.predict(X_test_full)).flatten()
         acc = accuracy_score(y_test, preds)
         print(f"\n  {name:22s}  Accuracy: {acc:.4f}")
         assert acc >= MIN_ACCURACY, \
@@ -440,7 +440,7 @@ class TestModelPredictions:
     def test_minimum_macro_f1(self, name, path, X_test_full, y_test):
         """Macro-F1 is more meaningful than accuracy for imbalanced classes."""
         model = joblib.load(path)
-        preds = np.array(model.predict(X_test_full.values)).flatten()
+        preds = np.array(model.predict(X_test_full)).flatten()
         f1 = f1_score(y_test, preds, average='macro')
         print(f"\n  {name:22s}  Macro-F1: {f1:.4f}")
         assert f1 >= MIN_MACRO_F1, \
@@ -450,7 +450,7 @@ class TestModelPredictions:
     def test_predicts_all_three_classes(self, name, path, X_test_full):
         """A good model should predict all 3 classes, not collapse to one."""
         model = joblib.load(path)
-        preds = np.array(model.predict(X_test_full.values)).flatten()
+        preds = np.array(model.predict(X_test_full)).flatten()
         predicted_classes = set(preds)
         assert len(predicted_classes) == 3, \
             (f"{name}: only predicted {len(predicted_classes)} class(es) "
@@ -479,7 +479,7 @@ class TestModelSummary:
                 print(f"  {name:<22}  ── model file not found ──")
                 continue
             model = joblib.load(path)
-            preds = np.array(model.predict(X_test_full.values)).flatten()
+            preds = np.array(model.predict(X_test_full)).flatten()
             acc   = accuracy_score(y_test, preds)
             macro = f1_score(y_test, preds, average='macro')
             per   = f1_score(y_test, preds, average=None, labels=[0, 1, 2])
@@ -501,7 +501,7 @@ class TestModelSummary:
             print(f"  Full Classification Report — {best}")
             print(f"{'─'*72}")
             best_model = joblib.load(MODEL_PATHS[best])
-            preds_best = np.array(best_model.predict(X_test_full.values)).flatten()
+            preds_best = np.array(best_model.predict(X_test_full)).flatten()
             print(classification_report(y_test, preds_best,
                                         target_names=class_names, digits=4))
 
@@ -525,7 +525,7 @@ class TestEndToEnd:
             pytest.skip("CatBoost model not found — skipping E2E test")
 
         model = joblib.load(best_model_path)
-        preds = np.array(model.predict(X_test_full.values)).flatten()
+        preds = np.array(model.predict(X_test_full)).flatten()
 
         acc = accuracy_score(y_test, preds)
         f1  = f1_score(y_test, preds, average='macro')

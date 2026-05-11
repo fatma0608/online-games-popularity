@@ -98,8 +98,8 @@ print(f"X_test  : {X_test.shape}    y_test  class counts: {pd.Series(y_test).val
 print(f"Classes : {dict(zip(le.classes_, le.transform(le.classes_)))}")
 CLASS_NAMES = list(le.classes_)   # ['High', 'Low', 'Medium']
 
-os.makedirs('./plots',  exist_ok=True)
-os.makedirs('./models', exist_ok=True)
+os.makedirs('./visualizations',  exist_ok=True)
+os.makedirs('./trained_models', exist_ok=True)
 
 # ══════════════════════════════════════════════════════════════════
 # CLASS-WEIGHT OPTIONS  (High=0, Low=1, Medium=2)
@@ -347,7 +347,7 @@ ax.set_xlabel('Importance', fontsize=9); ax.tick_params(labelsize=8)
 plt.tight_layout()
 plt.savefig('./visualizations/rf_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/rf_feature_importance.png")
+print("Saved: ./visualizations/rf_feature_importance.png")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -368,7 +368,7 @@ C_svm_values = [0.1, 1.0, 10.0]
 svm_C_results = []
 print(f"\n[Stage 1 — Varying C, kernel='rbf', class_weight='balanced' — {TUNE_SIZE} samples]")
 for C in C_svm_values:
-    m = SVC(C=C, kernel='rbf', class_weight='balanced', random_state=42, cache_size=500)
+    m = SVC(C=C, kernel='rbf', class_weight='balanced', random_state=42, cache_size=500,)
     m.fit(X_tune, y_tune)
     acc = accuracy_score(y_test, m.predict(X_test))
     f1  = f1_score(y_test, m.predict(X_test), average='macro')
@@ -411,7 +411,7 @@ best_cw_svm_label = max(svm_cw_results, key=lambda x: x['macro_f1'])['label']
 print(f"\nTraining final SVM on full data "
       f"(C={best_C_svm}, kernel={best_kernel_svm}, cw={best_cw_svm_label}) ...")
 best_svm = SVC(C=best_C_svm, kernel=best_kernel_svm, class_weight=best_cw_svm,
-               random_state=42, cache_size=1000)
+               random_state=42, cache_size=1000, probability=True)
 svm_acc, svm_f1, svm_train_t, svm_test_t, svm_pred = evaluate(
     f"SVM (C={best_C_svm}, kernel={best_kernel_svm}, cw={best_cw_svm_label})",
     best_svm, X_train, y_train, X_test, y_test
@@ -488,7 +488,7 @@ ax.set_xlabel('Importance', fontsize=9); ax.tick_params(labelsize=8)
 plt.tight_layout()
 plt.savefig('./visualizations/xgb_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/xgb_feature_importance.png")
+print("Saved: ./visualizations/xgb_feature_importance.png")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -556,7 +556,7 @@ ax.set_xlabel('Importance', fontsize=9); ax.tick_params(labelsize=8)
 plt.tight_layout()
 plt.savefig('./visualizations/lgb_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/lgb_feature_importance.png")
+print("Saved: ./visualizations/lgb_feature_importance.png")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -634,7 +634,7 @@ ax.set_xlabel('Importance', fontsize=9); ax.tick_params(labelsize=8)
 plt.tight_layout()
 plt.savefig('./visualizations/cat_feature_importance.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/cat_feature_importance.png")
+print("Saved: ./visualizations/cat_feature_importance.png")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -693,7 +693,7 @@ for ax, (ylabel, vals, title) in zip(axes, chart_metrics):
 plt.tight_layout()
 plt.savefig('./visualizations/model_comparison_bars.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/model_comparison_bars.png")
+print("Saved: ./visualizations/model_comparison_bars.png")
 
 # Macro-F1 bar chart
 fig, ax = plt.subplots(figsize=(12, 5), facecolor='#F8F7F4')
@@ -713,7 +713,7 @@ ax.tick_params(axis='y', labelsize=9)
 plt.tight_layout()
 plt.savefig('./visualizations/model_macro_f1.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/model_macro_f1.png")
+print("Saved: ./visualizations/model_macro_f1.png")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -740,7 +740,7 @@ for ax, (name, pred) in zip(axes_flat, all_preds):
 plt.tight_layout()
 plt.savefig('./visualizations/confusion_matrices.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/confusion_matrices.png")
+print("Saved: ./visualizations/confusion_matrices.png")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -779,7 +779,7 @@ plot_bar_group(axes[2][5], CW_LABELS, cat_cw_results, "CAT Stage3 — class_weig
 plt.tight_layout()
 plt.savefig('./visualizations/hyperparameter_tuning.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
-print("Saved: ./plots/hyperparameter_tuning.png")
+print("Saved: ./visualizations/hyperparameter_tuning.png")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -795,5 +795,5 @@ print("  ./models/xgboost.pkl")
 print("  ./models/lightgbm.pkl")
 print("  ./models/catboost.pkl")
 print("  ./models/label_encoder.pkl  (already saved by preprocessing_m2.py)")
-print("\nAll plots saved to ./plots/")
+print("\nAll plots saved to ./visualizations/")
 print("\nDone.")
