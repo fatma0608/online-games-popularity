@@ -1,0 +1,493 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import re
+import os
+import warnings
+import joblib
+warnings.filterwarnings('ignore')
+
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import TruncatedSVD
+
+for pkg in ['punkt', 'stopwords', 'wordnet', 'averaged_perceptron_tagger',
+            'omw-1.4', 'punkt_tab']:
+    try:
+        nltk.download(pkg, quiet=True)
+    except Exception:
+        pass
+
+COLORS = ['#4C8EDA', '#E8593C', '#1D9E75', '#7F77DD', '#EF9F27',
+          '#F4845F', '#56B4E9', '#CC79A7', '#D55E00', '#009E73', '#F0E442']
+
+# ─────────────────────────────────────────────
+# LOAD DATA
+# ─────────────────────────────────────────────
+df = pd.read_csv('./dataset/raw/train_data.csv')
+
+# ── Must mirror Preprocessing_m2.py exactly ──────────────────────
+# Preprocessing drops duplicates and resets the index before saving
+# idx_train / idx_test. Without this, the index sizes won't match.
+n_before = len(df)
+df.drop_duplicates(inplace=True)
+df.reset_index(drop=True, inplace=True)
+print(f"Dropped {n_before - len(df)} duplicate rows  ({n_before} → {len(df)})")
+
+TEXT_COLS = {
+    'about':            'AboutText',
+    'short':            'ShortDescrip',
+    'detail':           'DetailedDescrip',
+    'reviews':          'Reviews',
+    'name':             'ResponseName',
+    'PCMinReqsText':    'PCMinReqsText',
+    'PCRecReqsText':    'PCRecReqsText',
+    'LinuxMinReqsText': 'LinuxMinReqsText',
+    'LinuxRecReqsText': 'LinuxRecReqsText',
+    'MacMinReqsText':   'MacMinReqsText',
+    'MacRecReqsText':   'MacRecReqsText',
+}
+
+for key, col in list(TEXT_COLS.items()):
+    if col not in df.columns:
+        TEXT_COLS[key] = None
+TEXT_COLS = {k: v for k, v in TEXT_COLS.items() if v is not None}
+print("Text columns found:", list(TEXT_COLS.values()))
+
+for col in TEXT_COLS.values():
+    df[col] = df[col].fillna('')
+
+text_df = df[list(TEXT_COLS.values())].copy()
+text_df.index = df.index
+
+# ─────────────────────────────────────────────────────────────────
+# LOAD SPLIT INDICES FROM PREPROCESSING_M2.PY
+# ─────────────────────────────────────────────────────────────────
+idx_train_path = './dataset/processed/idx_train.npy'
+idx_test_path  = './dataset/processed/idx_test.npy'
+
+if not os.path.exists(idx_train_path) or not os.path.exists(idx_test_path):
+    raise FileNotFoundError(
+        "idx_train.npy / idx_test.npy not found.\n"
+        "Run Preprocessing_m2.py first."
+    )
+
+idx_train = np.load(idx_train_path)
+idx_test  = np.load(idx_test_path)
+
+print(f"\n  Loaded split indices: train={len(idx_train)}, test={len(idx_test)}")
+print(f"  Total rows in df   : {len(df)}")
+assert len(idx_train) + len(idx_test) == len(df), \
+    "Index files don't cover all rows — re-run Preprocessing_m2.py."
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 1 — RAW TEXT STATISTICS + SPARSITY CHECK
+# ─────────────────────────────────────────────────────────────────
+print("\n" + "="*60)
+print("STEP 1: Raw Text Statistics")
+print("="*60)
+
+SPARSITY_THRESHOLD = 0.5
+
+raw_stats    = {}
+keys_to_drop = []
+for key, col in TEXT_COLS.items():
+    vals        = text_df[col]
+    empty_ratio = (vals.str.len() <= 10).mean()
+    raw_stats[key] = {
+        'word_count':  vals.apply(lambda x: len(x.split())),
+        'has_content': (vals.str.len() > 10).sum(),
+        'empty':       (vals.str.len() <= 10).sum(),
+        'empty_ratio': empty_ratio,
+    }
+    print(f"\n  [{col}]")
+    print(f"    Non-empty rows : {raw_stats[key]['has_content']:,}")
+    print(f"    Empty rows     : {raw_stats[key]['empty']:,}  ({empty_ratio:.1%})")
+    print(f"    Avg word count : {raw_stats[key]['word_count'].mean():.1f}")
+    if empty_ratio > SPARSITY_THRESHOLD:
+        keys_to_drop.append(key)
+        print(f"    --> DROPPING (>{SPARSITY_THRESHOLD:.0%} empty)")
+
+for key in keys_to_drop:
+    col = TEXT_COLS.pop(key)
+    print(f"\nDropped sparse column: {col}")
+
+fig, axes = plt.subplots(1, len(TEXT_COLS), figsize=(5 * len(TEXT_COLS), 4), facecolor='#F8F7F4')
+if len(TEXT_COLS) == 1:
+    axes = [axes]
+for i, (key, col) in enumerate(TEXT_COLS.items()):
+    ax = axes[i]
+    ax.set_facecolor('#F0EFE8')
+    wc = raw_stats[key]['word_count']
+    ax.hist(wc.clip(0, wc.quantile(0.98)), bins=60,
+            color=COLORS[i % len(COLORS)], alpha=0.85, edgecolor='white', linewidth=0.3)
+    ax.set_title(col, fontsize=9, fontweight='500', color='#2C2C2A')
+    ax.set_xlabel('Word count (98th pct cap)', fontsize=8)
+    ax.set_ylabel('Frequency', fontsize=8)
+    ax.tick_params(labelsize=7)
+    mu = wc.mean()
+    ax.axvline(mu, color='#2C2C2A', linewidth=1.2, linestyle='--', label=f'mean={mu:.0f}')
+    ax.legend(fontsize=7)
+plt.suptitle("Raw Text — Word Count Distributions", fontsize=13, fontweight='600', color='#2C2C2A', y=1.02)
+plt.tight_layout()
+plt.savefig('./visualizations/plot_nlp_01_raw_word_counts.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.close()
+print("\nSaved: plot_nlp_01_raw_word_counts.png")
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 2 — TEXT CLEANING
+# ─────────────────────────────────────────────────────────────────
+print("\n" + "="*60)
+print("STEP 2: Text Cleaning")
+print("="*60)
+
+lemmatizer = WordNetLemmatizer()
+STOP_WORDS  = set(stopwords.words('english'))
+HTML_TAG_RE = re.compile(r'<[^>]+>')
+URL_RE      = re.compile(r'http\S+|www\.\S+')
+PUNCT_RE    = re.compile(r'[^a-zA-Z\s]')
+SPACE_RE    = re.compile(r'\s+')
+
+def clean_text(text: str) -> str:
+    text = HTML_TAG_RE.sub(' ', text)
+    text = URL_RE.sub(' ', text)
+    text = text.lower()
+    text = PUNCT_RE.sub(' ', text)
+    text = SPACE_RE.sub(' ', text).strip()
+    tokens = [lemmatizer.lemmatize(t) for t in text.split()
+              if t not in STOP_WORDS and len(t) > 2]
+    return ' '.join(tokens)
+
+def safe_normalize(X):
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    return X / norms
+
+cleaned = {}
+for key, col in TEXT_COLS.items():
+    print(f"  Cleaning {col} ...", end=' ', flush=True)
+    cleaned[key] = text_df[col].apply(clean_text)
+    print(f"done  (avg tokens: {cleaned[key].apply(lambda x: len(x.split())).mean():.1f})")
+
+fig, axes = plt.subplots(2, len(TEXT_COLS), figsize=(5 * len(TEXT_COLS), 7), facecolor='#F8F7F4')
+if len(TEXT_COLS) == 1:
+    axes = axes.reshape(2, 1)
+for i, (key, col) in enumerate(TEXT_COLS.items()):
+    before_wc = raw_stats[key]['word_count']
+    after_wc  = cleaned[key].apply(lambda x: len(x.split()))
+    cap = before_wc.quantile(0.98)
+    ax_b, ax_a = axes[0][i], axes[1][i]
+    ax_b.set_facecolor('#F0EFE8')
+    ax_b.hist(before_wc.clip(0, cap), bins=60, color='#4C8EDA', alpha=0.85, edgecolor='white', linewidth=0.3)
+    ax_b.set_title(col, fontsize=9, fontweight='500', color='#2C2C2A')
+    ax_b.set_ylabel('Raw', fontsize=8, color='#4C8EDA')
+    ax_b.tick_params(labelsize=7)
+    ax_b.axvline(before_wc.mean(), color='#2C2C2A', linewidth=1, linestyle='--')
+    ax_a.set_facecolor('#F0EFE8')
+    ax_a.hist(after_wc.clip(0, cap * 0.6), bins=60, color='#E8593C', alpha=0.85, edgecolor='white', linewidth=0.3)
+    ax_a.set_ylabel('Cleaned', fontsize=8, color='#E8593C')
+    ax_a.tick_params(labelsize=7)
+    ax_a.axvline(after_wc.mean(), color='#2C2C2A', linewidth=1, linestyle='--')
+plt.suptitle("Text Cleaning — Word Count Before vs After", fontsize=13, fontweight='600', color='#2C2C2A', y=1.01)
+plt.tight_layout()
+plt.savefig('./visualizations/plot_nlp_02_cleaning_before_after.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.close()
+print("Saved: plot_nlp_02_cleaning_before_after.png")
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 2b — TEXT LENGTH FEATURES  ← NEW
+# Medium games have longer AboutText than Low but shorter than High.
+# This is a direct numerical signal — add it as standalone features.
+# ─────────────────────────────────────────────────────────────────
+print("\n" + "="*60)
+print("STEP 2b: Text Length Features (Medium signal)")
+print("="*60)
+
+LENGTH_COLS = {
+    'about':  'AboutText',
+    'detail': 'DetailedDescrip',
+    'pcmin':  'PCMinReqsText',
+}
+length_features_all = {}
+for key, col in LENGTH_COLS.items():
+    if col in df.columns:
+        raw_len = df[col].fillna('').apply(len)
+        # log-length so scale doesn't dominate
+        length_features_all[f'textlen_{key}'] = np.log1p(raw_len)
+
+length_df = pd.DataFrame(length_features_all, index=df.index)
+
+# Split into train/test aligned versions
+length_train = length_df.iloc[idx_train].reset_index(drop=True)
+length_test  = length_df.iloc[idx_test].reset_index(drop=True)
+
+print(f"  Text length features added: {list(length_features_all.keys())}")
+for feat in length_features_all:
+    train_vals = length_train[feat]
+    print(f"  {feat}: train mean={train_vals.mean():.2f}  std={train_vals.std():.2f}")
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 3 — TF-IDF + LSA PER FIELD
+# ← FIX: lowered min_df from 3→2 for about+detail so Medium-specific
+#         vocabulary survives the frequency filter
+# ─────────────────────────────────────────────────────────────────
+print("\n" + "="*60)
+print("STEP 3: TF-IDF + LSA per Field (8 components each)")
+print("="*60)
+
+TFIDF_CONFIG = {
+    'about':            dict(max_features=500, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),  # ← min_df 3→2
+    'detail':           dict(max_features=500, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),  # ← min_df 3→2
+    'short':            dict(max_features=300, ngram_range=(1, 2), min_df=3, max_df=0.95, sublinear_tf=True),
+    'reviews':          dict(max_features=300, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),
+    'name':             dict(max_features=100, ngram_range=(1, 1), min_df=2, max_df=0.90, sublinear_tf=True),
+    'PCMinReqsText':    dict(max_features=200, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),
+    'PCRecReqsText':    dict(max_features=200, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),
+    'LinuxMinReqsText': dict(max_features=100, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),
+    'LinuxRecReqsText': dict(max_features=100, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),
+    'MacMinReqsText':   dict(max_features=100, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),
+    'MacRecReqsText':   dict(max_features=100, ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True),
+}
+TFIDF_CONFIG = {k: v for k, v in TFIDF_CONFIG.items() if k in cleaned}
+
+N_COMPONENTS = 8
+
+tfidf_vectorizers = {}
+svd_models        = {}
+tfidf_train_mats  = {}
+lsa_train_parts   = []
+lsa_test_parts    = []
+
+for key, cfg in TFIDF_CONFIG.items():
+    texts       = cleaned[key].values
+    train_texts = texts[idx_train]
+    test_texts  = texts[idx_test]
+
+    vec  = TfidfVectorizer(**cfg)
+    X_tr = vec.fit_transform(train_texts)
+    X_te = vec.transform(test_texts)
+    tfidf_vectorizers[key] = vec
+    tfidf_train_mats[key]  = X_tr
+
+    svd_field = TruncatedSVD(n_components=N_COMPONENTS, random_state=42)
+    lsa_tr    = svd_field.fit_transform(X_tr)
+    lsa_te    = svd_field.transform(X_te)
+    svd_models[key] = svd_field
+
+    lsa_tr = safe_normalize(lsa_tr)
+    lsa_te = safe_normalize(lsa_te)
+
+    explained = svd_field.explained_variance_ratio_.cumsum()[-1]
+    print(f"  [{key}]  vocab={len(vec.vocabulary_):,}  "
+          f"tfidf={X_tr.shape}  lsa=({X_tr.shape[0]},{N_COMPONENTS})  "
+          f"var_explained={explained*100:.1f}%")
+
+    col_names = [f'lsa_{key}_{j}' for j in range(N_COMPONENTS)]
+    lsa_train_parts.append(pd.DataFrame(lsa_tr, columns=col_names))
+    lsa_test_parts.append(pd.DataFrame(lsa_te,  columns=col_names))
+
+# Combine LSA + text length features
+nlp_train = pd.concat(lsa_train_parts + [length_train], axis=1)
+nlp_test  = pd.concat(lsa_test_parts  + [length_test],  axis=1)
+
+print(f"\n  LSA features       : {len(TFIDF_CONFIG) * N_COMPONENTS}")
+print(f"  Text length feats  : {len(length_features_all)}")
+print(f"  Total NLP features : {nlp_train.shape[1]}")
+print(f"  Train shape        : {nlp_train.shape}  (pre-SMOTE original rows)")
+print(f"  Test shape         : {nlp_test.shape}")
+
+# ── Plot 3: Explained variance per field ─────────────────────────
+fig, ax = plt.subplots(figsize=(9, 4), facecolor='#F8F7F4')
+ax.set_facecolor('#F0EFE8')
+field_vars = [(k, svd_models[k].explained_variance_ratio_.cumsum()[-1] * 100)
+              for k in TFIDF_CONFIG]
+field_vars.sort(key=lambda x: x[1], reverse=True)
+keys_sorted = [x[0] for x in field_vars]
+vars_sorted = [x[1] for x in field_vars]
+bars = ax.barh(range(len(keys_sorted)), vars_sorted,
+               color=[COLORS[i % len(COLORS)] for i in range(len(keys_sorted))],
+               alpha=0.85, height=0.6)
+ax.set_yticks(range(len(keys_sorted)))
+ax.set_yticklabels(keys_sorted, fontsize=9)
+ax.set_xlabel(f'Cumulative Explained Variance (%) — {N_COMPONENTS} LSA components', fontsize=9)
+ax.set_title('LSA Variance Explained per Field', fontsize=11, fontweight='500', color='#2C2C2A')
+ax.axvline(80, color='#888780', linewidth=1, linestyle='--', label='80%')
+ax.legend(fontsize=8)
+for bar, val in zip(bars, vars_sorted):
+    ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+            f'{val:.1f}%', va='center', fontsize=8)
+plt.tight_layout()
+plt.savefig('./visualizations/plot_nlp_03_lsa_variance_per_field.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.close()
+print("\nSaved: plot_nlp_03_lsa_variance_per_field.png")
+
+# ── Plot 4: Top TF-IDF terms per field ───────────────────────────
+fig, axes = plt.subplots(1, len(TFIDF_CONFIG), figsize=(5 * len(TFIDF_CONFIG), 4), facecolor='#F8F7F4')
+if len(TFIDF_CONFIG) == 1:
+    axes = [axes]
+for i, key in enumerate(TFIDF_CONFIG):
+    ax          = axes[i]
+    ax.set_facecolor('#F0EFE8')
+    mat         = tfidf_train_mats[key]
+    vocab       = tfidf_vectorizers[key].get_feature_names_out()
+    mean_scores = np.asarray(mat.mean(axis=0)).flatten()
+    top40_idx   = mean_scores.argsort()[-40:][::-1]
+    ax.barh(range(40), mean_scores[top40_idx][::-1],
+            color=COLORS[i % len(COLORS)], alpha=0.85, height=0.75)
+    ax.set_yticks(range(40))
+    ax.set_yticklabels(vocab[top40_idx][::-1], fontsize=6.5)
+    ax.set_title(f'{TEXT_COLS[key]}\nTop-40 TF-IDF terms', fontsize=8.5, fontweight='500', color='#2C2C2A')
+    ax.tick_params(axis='x', labelsize=7)
+plt.suptitle("TF-IDF — Top Terms per Field", fontsize=13, fontweight='600', color='#2C2C2A', y=1.02)
+plt.tight_layout()
+plt.savefig('./visualizations/plot_nlp_04_tfidf_top_terms.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.close()
+print("Saved: plot_nlp_04_tfidf_top_terms.png")
+
+# ── Plot 5: Top LSA component words per field ────────────────────
+n_fields_plot = min(4, len(TFIDF_CONFIG))
+fields_to_plot = list(TFIDF_CONFIG.keys())[:n_fields_plot]
+fig, axes = plt.subplots(n_fields_plot, 3, figsize=(15, 4 * n_fields_plot), facecolor='#F8F7F4')
+if n_fields_plot == 1:
+    axes = axes.reshape(1, 3)
+for row, key in enumerate(fields_to_plot):
+    vocab   = tfidf_vectorizers[key].get_feature_names_out()
+    svd_f   = svd_models[key]
+    for comp_i in range(3):
+        ax      = axes[row][comp_i]
+        ax.set_facecolor('#F0EFE8')
+        loading = svd_f.components_[comp_i]
+        top_pos = loading.argsort()[-10:][::-1]
+        top_neg = loading.argsort()[:5]
+        top_idx = np.concatenate([top_pos, top_neg])
+        top_scores = loading[top_idx]
+        bar_colors = ['#E8593C' if s > 0 else '#4C8EDA' for s in top_scores]
+        ax.barh(range(len(top_idx)), top_scores[::-1],
+                color=bar_colors[::-1], alpha=0.85, height=0.75)
+        ax.set_yticks(range(len(top_idx)))
+        ax.set_yticklabels(vocab[top_idx][::-1], fontsize=7)
+        ax.set_title(f'{key} — LSA component {comp_i}',
+                     fontsize=8.5, fontweight='500', color='#2C2C2A')
+        ax.axvline(0, color='#2C2C2A', linewidth=0.8)
+        ax.tick_params(axis='x', labelsize=7)
+plt.suptitle("Top Words per LSA Component per Field (red=positive, blue=negative)",
+             fontsize=12, fontweight='600', color='#2C2C2A', y=1.01)
+plt.tight_layout()
+plt.savefig('./visualizations/plot_nlp_05_lsa_components_per_field.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.close()
+print("Saved: plot_nlp_05_lsa_components_per_field.png")
+
+# ── Plot 6: LSA feature distributions train vs test ──────────────
+sample_cols = []
+for key in TFIDF_CONFIG:
+    sample_cols += [f'lsa_{key}_0', f'lsa_{key}_1']
+sample_cols = sample_cols[:10]
+
+fig, axes = plt.subplots(2, 5, figsize=(18, 6), facecolor='#F8F7F4')
+axes = axes.flatten()
+for i, col in enumerate(sample_cols):
+    ax = axes[i]
+    ax.set_facecolor('#F0EFE8')
+    ax.hist(nlp_train[col], bins=50, color='#4C8EDA', alpha=0.65,
+            label='Train', edgecolor='white', linewidth=0.2)
+    ax.hist(nlp_test[col],  bins=50, color='#E8593C', alpha=0.65,
+            label='Test',  edgecolor='white', linewidth=0.2)
+    ax.set_title(col, fontsize=7.5, fontweight='500', color='#2C2C2A')
+    ax.tick_params(labelsize=6.5)
+    if i == 0:
+        ax.legend(fontsize=7)
+plt.suptitle("LSA Feature Distributions — Train vs Test",
+             fontsize=12, fontweight='600', color='#2C2C2A', y=1.02)
+plt.tight_layout()
+plt.savefig('./visualizations/plot_nlp_06_lsa_train_vs_test.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+plt.close()
+print("Saved: plot_nlp_06_lsa_train_vs_test.png")
+
+# ── Plot 7: Top LSA features correlated with target ──────────────
+if 'GamePopularity' in df.columns:
+    le = joblib.load('./trained_models/label_encoder.pkl')
+    target_enc = le.transform(df['GamePopularity'].iloc[idx_train].values)
+    target_s = pd.Series(target_enc, index=range(len(idx_train)))
+
+    corrs = nlp_train.drop(columns=list(length_features_all.keys()), errors='ignore').corrwith(target_s).abs().sort_values(ascending=False)
+    top20 = corrs.head(20)
+    fig, ax = plt.subplots(figsize=(9, 5), facecolor='#F8F7F4')
+    ax.set_facecolor('#F0EFE8')
+    bar_colors = []
+    for c in top20.index[::-1]:
+        field = c.replace('lsa_', '').rsplit('_', 1)[0]
+        field_idx = list(TFIDF_CONFIG.keys()).index(field) if field in TFIDF_CONFIG else 0
+        bar_colors.append(COLORS[field_idx % len(COLORS)])
+    ax.barh(range(len(top20)), top20.values[::-1], color=bar_colors, alpha=0.85, height=0.75)
+    ax.set_yticks(range(len(top20)))
+    ax.set_yticklabels(top20.index[::-1], fontsize=8)
+    ax.set_xlabel('|Pearson correlation| with GamePopularity (encoded)', fontsize=9)
+    ax.set_title('Top 20 LSA Features by Correlation with Target\n(colour = field)',
+                 fontsize=10, fontweight='500', color='#2C2C2A')
+    ax.tick_params(labelsize=8)
+    plt.tight_layout()
+    plt.savefig('./visualizations/plot_nlp_07_lsa_feature_correlations.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+    plt.close()
+    print("Saved: plot_nlp_07_lsa_feature_correlations.png")
+
+# ── Plot 8: Text length by class (NEW) ───────────────────────────
+if 'GamePopularity' in df.columns:
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4), facecolor='#F8F7F4')
+    fig.suptitle('Text Length by Class — Medium is in the Middle Band',
+                 fontsize=11, fontweight='500', color='#2C2C2A')
+    class_colors = {'Low': '#4C8EDA', 'Medium': '#EF9F27', 'High': '#1D9E75'}
+    for i, (col_key, col_name) in enumerate([('about','AboutText'),
+                                              ('detail','DetailedDescrip'),
+                                              ('pcmin','PCMinReqsText')]):
+        ax = axes[i]
+        ax.set_facecolor('#F0EFE8')
+        if col_name in df.columns:
+            for cls, color in class_colors.items():
+                vals = df[df['GamePopularity']==cls][col_name].fillna('').apply(len)
+                ax.hist(vals.clip(0, vals.quantile(0.97)), bins=50,
+                        color=color, alpha=0.6, label=cls, edgecolor='white', linewidth=0.2)
+            ax.set_title(col_name, fontsize=9, fontweight='500', color='#2C2C2A')
+            ax.set_xlabel('Character length', fontsize=8)
+            ax.tick_params(labelsize=7)
+            if i == 0:
+                ax.legend(fontsize=7)
+    plt.tight_layout()
+    plt.savefig('./visualizations/plot_nlp_08_text_length_by_class.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
+    plt.close()
+    print("Saved: plot_nlp_08_text_length_by_class.png")
+
+# ─────────────────────────────────────────────────────────────────
+# SAVE
+# ─────────────────────────────────────────────────────────────────
+os.makedirs('./dataset/processed', exist_ok=True)
+os.makedirs('./models', exist_ok=True)
+
+# ── FIX: save TWO files ──────────────────────────────────────────
+# nlp_features_train.csv  → 9085 rows, aligned with idx_train (pre-SMOTE)
+#   Used in classification.py: merge into X_train BEFORE SMOTE
+# nlp_features_test.csv   → 2272 rows, aligned with idx_test
+#   Used in classification.py: merge into X_test as before
+
+nlp_train.to_csv('./dataset/processed/nlp_features_train.csv', index=False)
+nlp_test.to_csv('./dataset/processed/nlp_features_test.csv',   index=False)
+
+joblib.dump(tfidf_vectorizers, './trained_models/tfidf_vectorizers.pkl')
+joblib.dump(svd_models,        './trained_models/svd_models.pkl')
+
+print("\n" + "="*60)
+print("OUTPUTS SAVED")
+print("="*60)
+print(f"  Fields used        : {list(TFIDF_CONFIG.keys())}")
+print(f"  Fields dropped     : {keys_to_drop}")
+print(f"  Components/field   : {N_COMPONENTS}")
+print(f"  LSA features       : {len(TFIDF_CONFIG) * N_COMPONENTS}")
+print(f"  Text length feats  : {len(length_features_all)}  ← NEW (textlen_about, detail, pcmin)")
+print(f"  Total NLP features : {nlp_train.shape[1]}")
+print(f"")
+print(f"  nlp_features_train.csv : {nlp_train.shape}  ← merge into X_train BEFORE SMOTE")
+print(f"  nlp_features_test.csv  : {nlp_test.shape}   ← merge into X_test as before")
+print(f"")
+print(f"  IMPORTANT: update classification.py to merge nlp_train into")
+print(f"  X_train (pre-SMOTE) so models actually train on NLP features.")
