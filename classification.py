@@ -18,9 +18,7 @@ from xgboost                     import XGBClassifier
 from lightgbm                    import LGBMClassifier
 from catboost                    import CatBoostClassifier
 
-# ══════════════════════════════════════════════════════════════════
 # LOAD PROCESSED DATA
-# ══════════════════════════════════════════════════════════════════
 print("="*60)
 print("LOADING DATA")
 print("="*60)
@@ -42,13 +40,6 @@ nlp_test_path  = './dataset/processed/nlp_features_test.csv'
 if os.path.exists(nlp_train_path) and os.path.exists(nlp_test_path):
     nlp_train = pd.read_csv(nlp_train_path)   # 9085 rows — pre-SMOTE originals
     nlp_test  = pd.read_csv(nlp_test_path)    # 2272 rows
-
-    # ── FIXED: no double SMOTE ─────────────────────────────────────
-    # preprocessing already ran SMOTE and saved train.csv (13526 rows).
-    # We cannot merge 9085-row NLP into 13526-row train directly.
-    # Correct approach: load pre-SMOTE originals from original_train.csv
-    # (saved by preprocessing), merge NLP, then run SMOTE once here.
-    # train.csv is discarded — SMOTE runs only once in this file.
 
     original_train = pd.read_csv('./dataset/processed/original_train.csv')
 
@@ -101,9 +92,8 @@ CLASS_NAMES = list(le.classes_)   # ['High', 'Low', 'Medium']
 os.makedirs('./visualizations',  exist_ok=True)
 os.makedirs('./trained_models', exist_ok=True)
 
-# ══════════════════════════════════════════════════════════════════
 # CLASS-WEIGHT OPTIONS  (High=0, Low=1, Medium=2)
-# ══════════════════════════════════════════════════════════════════
+
 CW_OPTIONS = [
     'balanced',
     {0: 2.0, 1: 1.0, 2: 4.0},
@@ -111,7 +101,7 @@ CW_OPTIONS = [
     {0: 3.0, 1: 1.0, 2: 8.0},
 ]
 CW_LABELS = ['balanced', 'H2-M4', 'H2-M6', 'H3-M8']
-
+# لbalanced automatically assigns larger weights to minority classes and smaller weights to majority classes based on inverse class frequency.
 def make_sample_weight(y, cw):
     """Convert class_weight dict (or 'balanced') to a per-sample weight array."""
     if cw == 'balanced':
@@ -120,10 +110,8 @@ def make_sample_weight(y, cw):
     for cls, weight in cw.items():
         w[y == cls] = weight
     return w
-
-# ══════════════════════════════════════════════════════════════════
+  
 # HELPERS
-# ══════════════════════════════════════════════════════════════════
 def evaluate(name, model, X_tr, y_tr, X_te, y_te, fit_params=None):
     fit_params = fit_params or {}
     t0 = time.time()
@@ -222,15 +210,15 @@ def plot_bar_group(ax, xs, results_list, title):
     ax.legend(fontsize=6); ax.tick_params(labelsize=7)
 
 
-# ══════════════════════════════════════════════════════════════════
 # MODEL 1 — LOGISTIC REGRESSION
 # Stage 1: C  |  Stage 2: solver  |  Stage 3: class_weight
-# ══════════════════════════════════════════════════════════════════
+
 print("\n" + "="*60)
 print("MODEL 1: Logistic Regression — Hyperparameter Tuning")
 print("="*60)
 
 # Stage 1 — C
+#bigger c complex model,more generlized ,hard,may overfit , smaller >>regulization
 C_values = [0.01, 0.1, 1.0, 10.0]
 lr_C_results = []
 print("\n[Stage 1 — Varying C, solver='lbfgs', class_weight='balanced' fixed]")
@@ -279,10 +267,8 @@ lr_acc, lr_f1, lr_train_t, lr_test_t, lr_pred = evaluate(
 joblib.dump(best_lr, './trained_models/logistic_regression.pkl')
 
 
-# ══════════════════════════════════════════════════════════════════
-# MODEL 2 — RANDOM FOREST
-# Stage 1: n_estimators  |  Stage 2: max_depth  |  Stage 3: class_weight
-# ══════════════════════════════════════════════════════════════════
+# MODEL 2 — RANDOM FOREST for non linear feature interaction
+# Stage 1: n_estimators (controls number of trees) |  Stage 2: max_depth for tree(complexity control) |  Stage 3: class_weight
 print("\n" + "="*60)
 print("MODEL 2: Random Forest — Hyperparameter Tuning")
 print("="*60)
@@ -349,11 +335,12 @@ plt.savefig('./visualizations/rf_feature_importance.png', dpi=130, bbox_inches='
 plt.close()
 print("Saved: ./visualizations/rf_feature_importance.png")
 
-
-# ══════════════════════════════════════════════════════════════════
-# MODEL 3 — SVM
+# Hyperparameter tuning for SVM:
+# 1) Tune regularization strength (C)
+# 2) Tune kernel type for nonlinear separation
+# 3) Tune class weights to improve minority-class performance
+# MODEL 3 — SVM best boundry , bigger merge
 # Stage 1: C  |  Stage 2: kernel  |  Stage 3: class_weight
-# ══════════════════════════════════════════════════════════════════
 print("\n" + "="*60)
 print("MODEL 3: SVM — Hyperparameter Tuning")
 print("="*60)
@@ -419,10 +406,10 @@ svm_acc, svm_f1, svm_train_t, svm_test_t, svm_pred = evaluate(
 joblib.dump(best_svm, './trained_models/svm.pkl')
 
 
-# ══════════════════════════════════════════════════════════════════
+
 # MODEL 4 — XGBOOST
 # Stage 1: n_estimators  |  Stage 2: learning_rate  |  Stage 3: class_weight
-# ══════════════════════════════════════════════════════════════════
+
 print("\n" + "="*60)
 print("MODEL 4: XGBoost — Hyperparameter Tuning")
 print("="*60)
@@ -490,8 +477,8 @@ plt.savefig('./visualizations/xgb_feature_importance.png', dpi=130, bbox_inches=
 plt.close()
 print("Saved: ./visualizations/xgb_feature_importance.png")
 
+#XGBoost incrementally improves performance by training sequential trees that focus on correcting previous prediction errors while using sample weights to address class imbalance.
 
-# ══════════════════════════════════════════════════════════════════
 # MODEL 5 — LIGHTGBM
 # Stage 1: n_estimators  |  Stage 2: learning_rate  |  Stage 3: class_weight
 # ══════════════════════════════════════════════════════════════════
@@ -559,10 +546,9 @@ plt.close()
 print("Saved: ./visualizations/lgb_feature_importance.png")
 
 
-# ══════════════════════════════════════════════════════════════════
 # MODEL 6 — CATBOOST
 # Stage 1: iterations  |  Stage 2: learning_rate  |  Stage 3: class_weight
-# ══════════════════════════════════════════════════════════════════
+
 print("\n" + "="*60)
 print("MODEL 6: CatBoost — Hyperparameter Tuning")
 print("="*60)

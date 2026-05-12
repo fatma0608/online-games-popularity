@@ -5,19 +5,15 @@ import matplotlib.gridspec as gridspec
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import IsolationForest
-from sklearn.feature_selection import mutual_info_classif   # ← CHANGED from mutual_info_regression
-from imblearn.over_sampling import SMOTE                    # ← NEW
+from sklearn.feature_selection import mutual_info_classif  
+from imblearn.over_sampling import SMOTE                
 import os
 import joblib
 import warnings
 warnings.filterwarnings('ignore')
 
-# ══════════════════════════════════════════════════════════════════
 # LOAD DATA
-# ══════════════════════════════════════════════════════════════════
 df = pd.read_csv('./dataset/raw/train_data.csv')
-
-# ── Drop duplicate rows before any processing ────────────────────
 n_before = len(df)
 df.drop_duplicates(inplace=True)
 df.reset_index(drop=True, inplace=True)
@@ -48,7 +44,7 @@ print("\nDropped low variance bool columns:", list(low_var_bool))
 
 df.drop(columns=['QueryID', 'ResponseID'], inplace=True, errors='ignore')
 
-# ── Date features ────────────────────────────────────────────────
+
 df['ReleaseDate'] = pd.to_datetime(df['ReleaseDate'], errors='coerce')
 df['release_year'] = df['ReleaseDate'].dt.year
 df['release_month'] = df['ReleaseDate'].dt.month
@@ -57,8 +53,6 @@ df['release_year'] = df['release_year'].fillna(df['release_year'].median())
 df['release_month'] = df['release_month'].fillna(6)
 df['game_age_days'] = df['game_age_days'].fillna(df['game_age_days'].median())
 df.drop(columns=['ReleaseDate'], inplace=True)
-
-# ── Engineered features ──────────────────────────────────────────
 df['discount_ratio'] = (
     (df['PriceInitial'] - df['PriceFinal']) /
     (df['PriceInitial'] + 1e-9)
@@ -87,24 +81,26 @@ df['has_mac_min_reqs']   = df['MacMinReqsText'].fillna('').apply(lambda x: 1 if 
 df['has_drm']            = df['DRMNotice'].fillna('').apply(lambda x: 1 if len(x.strip()) > 1 else 0)
 df['has_ext_account']    = df['ExtUserAcctNotice'].fillna('').apply(lambda x: 1 if len(x.strip()) > 1 else 0)
 
-# ── NEW for classification: platform count + genre count ─────────
+#  for classification: platform count , genre count 
+#count number of platforms of game , entshar
 platform_cols = ['PlatformWindows', 'PlatformLinux', 'PlatformMac']
 df['platform_count'] = df[[c for c in platform_cols if c in df.columns]].sum(axis=1)
-
+#types of game
 genre_cols = [c for c in df.columns if c.startswith('GenreIs')]
 df['genre_count'] = df[genre_cols].sum(axis=1)
-
+#feature per game
 category_cols = [c for c in df.columns if c.startswith('Category')]
 df['category_count'] = df[category_cols].sum(axis=1)
 
-# ── NEW: price tier bucket ────────────────────────────────────────
+#  price tier bucket 
+#from continuous noisy price to structured pricing categories
 df['price_tier'] = pd.cut(
     df['PriceFinal'],
     bins=[-0.01, 0.0, 5.0, 15.0, 30.0, np.inf],
     labels=[0, 1, 2, 3, 4]
 ).astype(int)
 
-# ── Log transforms for SteamSpy columns ──────────────────────────
+#Log transforms for SteamSpy columns 
 steamspy_cols = [
     'SteamSpyOwners', 'SteamSpyOwnersVariance',
     'SteamSpyPlayersEstimate', 'SteamSpyPlayersVariance'
@@ -112,7 +108,6 @@ steamspy_cols = [
 for c in steamspy_cols:
     df[f'{c}_log'] = np.log1p(df[c])
 
-# ── DROP ALL TEXT / STRING COLUMNS ───────────────────────────────
 drop_text_cols = [
     'QueryName', 'ResponseName', 'Website', 'SupportEmail', 'SupportURL',
     'LegalNotice', 'Reviews', 'SupportedLanguages', 'ShortDescrip',
@@ -179,14 +174,14 @@ df['owners_per_achievement'] = df['SteamSpyOwners_log'] / (df['AchievementCount'
 df['dlc_x_owners'] = np.log1p(df['DLCCount']) * df['SteamSpyOwners_log']
 df['movie_x_owners']  = df['MovieCount'] * df['SteamSpyOwners_log']
 
-# ── FIX 2: tier/bucket features to help models find the "Medium band" ──
-# Medium games have ~23x more owners than Low but ~4x less than High.
-# Bucketing captures this ordinal structure directly.
+# ─ tier/bucket features to help models find the "Medium"
+# people who owned the game
+#Medium games were harder bec lie between the extreme Low and High regions
 df['owners_tier'] = pd.cut(
     df['SteamSpyOwners_log'],
     bins=5, labels=[0, 1, 2, 3, 4]
 ).astype(int)
-
+#people who actully play the game
 df['achievement_tier'] = pd.cut(
     df['AchievementCount'],
     bins=[-1, 0, 20, 100, np.inf],
@@ -204,9 +199,7 @@ CONTINUOUS_COLS += [
 ]
 CONTINUOUS_COLS = [c for c in CONTINUOUS_COLS if c in df.columns]
 
-# ══════════════════════════════════════════════════════════════════
-# ENCODE TARGET                                    ← NEW SECTION
-# ══════════════════════════════════════════════════════════════════
+# ENCODE TARGET                                
 le = LabelEncoder()
 # Fit on known classes to guarantee consistent ordering
 le.fit(['High', 'Low', 'Medium'])
@@ -214,9 +207,8 @@ df['GamePopularity_enc'] = le.transform(df['GamePopularity'])
 print(f"\nTarget encoding: {dict(zip(le.classes_, le.transform(le.classes_)))}")
 # High=0, Low=1, Medium=2  (alphabetical — sklearn default)
 
-# ══════════════════════════════════════════════════════════════════
-# TRAIN / TEST SPLIT  (stratified to preserve class ratios)  ← CHANGED
-# ══════════════════════════════════════════════════════════════════
+
+ #train test split with stratification
 X = df.drop(columns=['GamePopularity', 'GamePopularity_enc'])
 y = df['GamePopularity_enc']
 
@@ -330,9 +322,7 @@ def plot_boxplots(before_df, after_df, cols, title, filename):
     plt.close()
     print(f"  Saved: {filename}")
 
-# ══════════════════════════════════════════════════════════════════
 # STEP 1 — OUTLIER CAPPING via IQR
-# ══════════════════════════════════════════════════════════════════
 NO_IQR_COLS = [
     'RequiredAge', 'DemoCount', 'DeveloperCount',
     'DLCCount', 'PackageCount', 'PublisherCount',
@@ -397,9 +387,7 @@ print(f"IQR kept     : {len(X_train)} rows")
 print(f"ISO kept     : {outlier_mask.sum()} rows")
 print(f"ISO removed  : {(~outlier_mask).sum()} rows")
 
-# ══════════════════════════════════════════════════════════════════
 # STEP 2 — STANDARD SCALING
-# ══════════════════════════════════════════════════════════════════
 print("\n" + "="*60)
 print("STEP 2: Standard Scaling (continuous columns only)")
 print("="*60)
@@ -431,9 +419,7 @@ plot_boxplots(
     filename="./visualizations/scaling_boxplots.png",
 )
 
-# ══════════════════════════════════════════════════════════════════
-# STEP 3 — SMOTE (oversample minority classes)          ← NEW
-# ══════════════════════════════════════════════════════════════════
+#SMOTE (oversample minority classes)  for class imbalancenB etter minority-class recall
 print("\n" + "="*60)
 print("STEP 3: SMOTE — Oversampling minority classes")
 print("="*60)
@@ -487,10 +473,9 @@ plt.tight_layout()
 plt.savefig('./visualizations/smote_class_distribution.png', dpi=130, bbox_inches='tight', facecolor='#F8F7F4')
 plt.close()
 print("Saved: ./visualizations/smote_class_distribution.png")
-
-# ══════════════════════════════════════════════════════════════════
-# STEP 4 — MUTUAL INFORMATION (classification)          ← CHANGED
-# ══════════════════════════════════════════════════════════════════
+     
+# MUTUAL INFORMATION (classification)   
+ #Mutual Information measures how much information a feature provides about the target class.  
 print("\n" + "="*60)
 print("STEP 4: Mutual Information — Classification")
 print("="*60)
@@ -522,9 +507,7 @@ print("Saved: ./visualizations/mutual_information_classif.png")
 TOP_FEATURES = mi_df.head(5)['feature'].tolist()
 print("\nTop 5 features by MI:", TOP_FEATURES)
 
-# ══════════════════════════════════════════════════════════════════
 # SAVE PROCESSED DATA
-# ══════════════════════════════════════════════════════════════════
 print("\n" + "="*60)
 print("SAVING PROCESSED DATA")
 print("="*60)
@@ -553,9 +536,7 @@ print(f"  Saved: ./dataset/processed/train.csv          → shape {train_df.shap
 print(f"  Saved: ./dataset/processed/original_train.csv → shape {original_train_df.shape}  (pre-SMOTE originals)")
 print(f"  Saved: ./dataset/processed/test.csv           → shape {test_df.shape}")
 
-# ══════════════════════════════════════════════════════════════════
 # SAVE MODELS / TRANSFORMERS
-# ══════════════════════════════════════════════════════════════════
 os.makedirs('./trained_models', exist_ok=True)
 joblib.dump(scaler,           './trained_models/scaler.pkl')
 joblib.dump(le,               './trained_models/label_encoder.pkl')

@@ -25,7 +25,8 @@ for pkg in ["punkt", "stopwords", "wordnet", "omw-1.4", "punkt_tab"]:
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from sklearn.metrics import (
-    accuracy_score, f1_score, classification_report, confusion_matrix
+    accuracy_score, f1_score, classification_report, confusion_matrix,
+    precision_score, recall_score
 )
 
 # ─────────────────────────────────────────────────────────────────
@@ -252,7 +253,20 @@ def _align(model, X: pd.DataFrame) -> pd.DataFrame:
     for c in expected:
         if c not in X.columns:
             X[c] = 0.0
-    return X[expected]
+    X = X[expected]
+    # CatBoost enforces exact column order from training — reset to match
+    try:
+        model_type = type(model).__name__
+        if "CatBoost" in model_type:
+            train_feature_names = model.feature_names_
+            if train_feature_names is not None:
+                for c in train_feature_names:
+                    if c not in X.columns:
+                        X[c] = 0.0
+                X = X[train_feature_names]
+    except Exception:
+        pass
+    return X
 
 def _data_ready():
     return (
@@ -351,10 +365,9 @@ def _preprocess_row(raw: dict, tfidf_vecs, svd_mods, scaler) -> pd.DataFrame:
     dlc_x_owners           = dlc_cnt_log * ss_own_log
     movie_x_owners         = movie_count  * ss_own_log
 
-    # 7. Tier / bin features — mirrors Preprocessing_m2.py exactly
+    # 7. Tier / bin features
     rec_count = flt("RecommendationCount", 0)
 
-    # platform_count, genre_count, category_count  (sum of flag columns from raw input)
     genre_flags    = ["GenreIsNonGame","GenreIsIndie","GenreIsAction","GenreIsAdventure",
                       "GenreIsCasual","GenreIsStrategy","GenreIsRPG","GenreIsSimulation",
                       "GenreIsEarlyAccess","GenreIsFreeToPlay","GenreIsSports",
@@ -366,18 +379,13 @@ def _preprocess_row(raw: dict, tfidf_vecs, svd_mods, scaler) -> pd.DataFrame:
     category_count = float(sum(flt(f, 0.0) for f in category_flags))
     platform_count = flt("PlatformWindows", 1) + flt("PlatformLinux", 0) + flt("PlatformMac", 0)
 
-    # price_tier: pd.cut with exact same bins as Preprocessing_m2.py
     price_tier = float(pd.cut(
         [price_final],
         bins=[-0.01, 0.0, 5.0, 15.0, 30.0, float("inf")],
         labels=[0, 1, 2, 3, 4]
     )[0])
 
-    # owners_tier / players_tier: 5 equal bins on log values (Preprocessing_m2.py uses bins=5)
-    # We replicate with fixed quantile-like edges derived from log scale
     def _log_tier5(log_val):
-        """5 equal-width bins on the log-transformed value, clamped 0–4."""
-        # log1p(50M) ≈ 17.7  →  each bin ≈ 3.54
         edges = [0, 3.54, 7.08, 10.62, 14.16, float("inf")]
         for i, (lo, hi) in enumerate(zip(edges, edges[1:])):
             if log_val <= hi:
@@ -673,7 +681,7 @@ with tab_predict:
         "📋  PASTE CSV ROW",
         "📁  UPLOAD CSV FILE",
     ])
-    raw_input: dict | None = None
+    raw_input = None
 
     # ── TAB A: Structured form ─────────────────────────────────
     with itab_form:
@@ -774,7 +782,8 @@ with tab_predict:
         st.markdown(
             "<div class='tip'>"
             "Upload a CSV with the same columns as train_data.csv (raw, before preprocessing). "
-            "If multiple rows, the first data row is used."
+            "If multiple rows, all rows are predicted and accuracy is shown if "
+            "<code>GamePopularity_enc</code> column is present."
             "</div>",
             unsafe_allow_html=True,
         )
@@ -783,14 +792,11 @@ with tab_predict:
             try:
                 df_up = pd.read_csv(uploaded)
                 st.success(f"File loaded · {df_up.shape[0]} rows · {df_up.shape[1]} columns")
-                if df_up.shape[0] > 1:
-                    st.info(f"Multiple rows detected — using row 1 of {df_up.shape[0]}.")
                 st.dataframe(df_up.head(3), use_container_width=True)
                 _, btn_col3, _ = st.columns([2, 2, 2])
                 with btn_col3:
                     if st.button("🏷️  CLASSIFY FROM FILE", key="btn_upload"):
                         raw_input = df_up.copy()
-                       # raw_input = df_up.iloc[0].to_dict()
             except Exception as e:
                 st.error(f"Could not read file: {e}")
 
@@ -800,12 +806,12 @@ with tab_predict:
         st.markdown('<div class="sec"><div class="sec-dot" style="background:#5bf6c8"></div>'
                     '<div class="sec-lbl">Pipeline Execution</div></div>', unsafe_allow_html=True)
 
-        _steps: list[tuple[str, str]] = []
-        success      = False
-        pred_class   = None
-        pred_label   = None
-        pred_proba   = None
-        X_new        = None
+        _steps = []
+        success    = False
+        pred_class = None
+        pred_label = None
+        pred_proba = None
+        X_new      = None
 
         def _render_steps(steps):
             parts = []
@@ -842,41 +848,26 @@ with tab_predict:
                 _steps.append(("Scaler not found — features will not be scaled", "warn"))
 
             _render_steps(_steps)
+
             if isinstance(raw_input, pd.DataFrame):
-                 processed_rows = []
-                 for _, row in raw_input.iterrows():       
-                         feat = _preprocess_row(
-                         row.to_dict(),
-                         tfidf_vecs,
-                         svd_mods,
-                         scaler
-                         )
-                         processed_rows.append(feat)
-                 feat_df = pd.concat(processed_rows, ignore_index=True)
+                processed_rows = []
+                for _, row in raw_input.iterrows():
+                    feat = _preprocess_row(row.to_dict(), tfidf_vecs, svd_mods, scaler)
+                    processed_rows.append(feat)
+                feat_df = pd.concat(processed_rows, ignore_index=True)
             else:
+                feat_df = _preprocess_row(raw_input, tfidf_vecs, svd_mods, scaler)
 
-                  feat_df = _preprocess_row(
-                  raw_input,
-                  tfidf_vecs,
-                  svd_mods,
-                  scaler
-               )
-
-            
             _steps.append((f"Feature vector assembled — {feat_df.shape[1]} columns before alignment", "done"))
             _render_steps(_steps)
 
             X_new = _align(pred_model, feat_df)
             _steps.append((f"Feature alignment → {X_new.shape[1]} features matched to model", "done"))
             _render_steps(_steps)
-            # ================= CLASSIFICATION PREDICTIONS =================
 
-            preds = pred_model.predict(X_new)
-
-            # decode labels
+            preds        = pred_model.predict(X_new)
             decoded_preds = [_decode_class(int(p)) for p in preds]
 
-            # probabilities
             pred_proba = None
             if hasattr(pred_model, "predict_proba"):
                 pred_proba = pred_model.predict_proba(X_new)
@@ -889,13 +880,11 @@ with tab_predict:
             # ============================================================
             # SINGLE SAMPLE
             # ============================================================
-
             if len(preds) == 1:
 
                 pred_class = int(preds[0])
                 pred_label = decoded_preds[0]
-
-                cls_color = CLASS_COLORS.get(pred_label, "#5bf6c8")
+                cls_color  = CLASS_COLORS.get(pred_label, "#5bf6c8")
 
                 st.markdown(
                     f"<div class='result-box' style='background:linear-gradient(135deg,#0d0f14,#111827);"
@@ -908,26 +897,18 @@ with tab_predict:
                     unsafe_allow_html=True,
                 )
 
-                # ================= PROBABILITIES =================
                 if pred_proba is not None:
-
                     st.markdown(
                         '<div class="sec"><div class="sec-dot" style="background:#5b8df6"></div>'
                         '<div class="sec-lbl">Class Probabilities</div></div>',
                         unsafe_allow_html=True
                     )
-
                     prob_cols = st.columns(len(CLASS_NAMES))
-
                     for i, (cls_name, p_col) in enumerate(zip(CLASS_NAMES, prob_cols)):
-
                         prob_val = float(pred_proba[0][i]) if i < len(pred_proba[0]) else 0.0
-
-                        cls_clr = CLASS_COLORS[cls_name]
-                        is_pred = cls_name == pred_label
-
-                        border = f"border:1px solid {cls_clr};" if is_pred else ""
-
+                        cls_clr  = CLASS_COLORS[cls_name]
+                        is_pred  = cls_name == pred_label
+                        border   = f"border:1px solid {cls_clr};" if is_pred else ""
                         p_col.markdown(
                             f"<div style='background:var(--surface);{border}"
                             f"border-radius:10px;padding:14px;text-align:center'>"
@@ -944,24 +925,24 @@ with tab_predict:
             # ============================================================
             # MULTIPLE SAMPLES
             # ============================================================
-
             else:
 
+                # ── Predictions table (no confidence column) ──────────
                 result_df = pd.DataFrame({
-                    "Row": range(1, len(preds) + 1),
+                    "Row"            : range(1, len(preds) + 1),
                     "Predicted_Class": preds,
                     "Predicted_Label": decoded_preds,
                 })
 
-                # add confidence if available
-                if pred_proba is not None:
-                    result_df["Confidence"] = pred_proba.max(axis=1)
-
+                st.markdown(
+                    '<div class="sec"><div class="sec-dot" style="background:#5b8df6"></div>'
+                    '<div class="sec-lbl">Predictions</div></div>',
+                    unsafe_allow_html=True,
+                )
                 st.dataframe(result_df, use_container_width=True)
 
-                # ================= DOWNLOAD CSV =================
+                # Download
                 csv_data = result_df.to_csv(index=False).encode("utf-8")
-
                 st.download_button(
                     label="⬇ Download Predictions CSV",
                     data=csv_data,
@@ -969,90 +950,81 @@ with tab_predict:
                     mime="text/csv",
                 )
 
-                # ========================================================
-                # METRICS (IF TARGET EXISTS)
-                # ========================================================
+                # ── Accuracy (only if true labels exist) ──────────────
+                # accept GamePopularity_enc (int) OR GamePopularity (string)
+                actual = None
+                if isinstance(raw_input, pd.DataFrame):
+                    if TARGET in raw_input.columns:
+                        actual = raw_input[TARGET].values.astype(int)
+                    elif "GamePopularity" in raw_input.columns and label_encoder is not None:
+                        actual = label_encoder.transform(raw_input["GamePopularity"].values)
 
-                if isinstance(raw_input, pd.DataFrame) and TARGET in raw_input.columns:
-
-                    from sklearn.metrics import (
-                        accuracy_score,
-                        precision_score,
-                        recall_score,
-                        f1_score,
-                        classification_report,
-                        confusion_matrix,
-                    )
-
-                    actual = raw_input[TARGET].values
+                if actual is not None:
 
                     acc  = accuracy_score(actual, preds)
                     prec = precision_score(actual, preds, average="weighted", zero_division=0)
                     rec  = recall_score(actual, preds, average="weighted", zero_division=0)
                     f1   = f1_score(actual, preds, average="weighted", zero_division=0)
 
-                    m1, m2, m3, m4 = st.columns(4)
+                    st.markdown("---")
+                    st.markdown(
+                        '<div class="sec"><div class="sec-dot" style="background:#5bf6c8"></div>'
+                        '<div class="sec-lbl">Accuracy Metrics</div></div>',
+                        unsafe_allow_html=True,
+                    )
 
+                    # Big accuracy banner
+                    st.markdown(
+                        f"<div style='background:linear-gradient(135deg,#0d0f14,#111827);"
+                        f"border:1px solid #5bf6c8;border-radius:12px;padding:28px;"
+                        f"text-align:center;margin-bottom:16px'>"
+                        f"<div style='font-size:11px;color:var(--muted);font-family:var(--mono);"
+                        f"margin-bottom:10px'>{sel_model} · {len(preds)} samples</div>"
+                        f"<div style='font-size:52px;font-weight:700;font-family:var(--mono);"
+                        f"color:#5bf6c8;line-height:1'>{acc:.2%}</div>"
+                        f"<div style='font-size:11px;color:var(--muted);margin-top:6px'>Accuracy</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    # 4 metric cards
+                    m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Accuracy",  f"{acc:.4f}")
                     m2.metric("Precision", f"{prec:.4f}")
                     m3.metric("Recall",    f"{rec:.4f}")
                     m4.metric("F1 Score",  f"{f1:.4f}")
 
-                    st.markdown(
-                        f"<div style='background:#13161e;border:1px solid #5bf6c8;"
-                        f"border-radius:10px;padding:16px 20px;margin-top:12px;text-align:center'>"
-                        f"<div style='font-size:11px;color:#6b7280;font-family:monospace'>Classification Accuracy</div>"
-                        f"<div style='font-size:36px;font-weight:700;color:#5bf6c8;font-family:monospace'>{acc:.4f}</div>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                    # ================= CLASSIFICATION REPORT =================
                     with st.expander("📋 Classification Report"):
-
                         report = classification_report(
-                            actual,
-                            preds,
+                            actual, preds,
                             target_names=CLASS_NAMES,
                             output_dict=True,
-                            zero_division=0
+                            zero_division=0,
                         )
+                        st.dataframe(pd.DataFrame(report).transpose(), use_container_width=True)
 
-                        st.dataframe(
-                            pd.DataFrame(report).transpose(),
-                            use_container_width=True
-                        )
-
-                    # ================= CONFUSION MATRIX =================
                     with st.expander("📊 Confusion Matrix"):
-
                         cm = confusion_matrix(actual, preds)
-
                         cm_df = pd.DataFrame(
                             cm,
                             index=[f"Actual {c}" for c in CLASS_NAMES],
-                            columns=[f"Pred {c}" for c in CLASS_NAMES]
+                            columns=[f"Pred {c}" for c in CLASS_NAMES],
                         )
-
                         st.dataframe(cm_df, use_container_width=True)
 
-            # ============================================================
-            # FEATURE VECTOR
-            # ============================================================
-
+            # ── Feature vector expander (always shown) ─────────────
             with st.expander("🔍 Show processed feature vector"):
                 st.dataframe(X_new, use_container_width=True)
 
         except Exception as e:
             _steps.append((f"ERROR: {e}", "err"))
             _render_steps(_steps)
-
             st.error("Prediction pipeline failed.")
             st.code(traceback.format_exc(), language="python")
 
+
 # ══════════════════════════════════════════════════════════════════
 # TAB 2 — FEATURE SELECTION
-# Dominant-value → VarianceThreshold → RF importance
 # ══════════════════════════════════════════════════════════════════
 with tab_fs:
     from sklearn.feature_selection import VarianceThreshold
@@ -1172,7 +1144,7 @@ with tab_fs:
             X_test     = pd.DataFrame(Xte_a, columns=sel_vt)
             L(f"  [②] VarianceThreshold={VAR_THRESHOLD} → dropped {len(before_var)-len(sel_vt):3d}  remaining: {X_train.shape[1]}", "muted")
 
-            # ③ RF importance (classifier)
+            # ③ RF importance
             L("  [③] fitting RandomForestClassifier for importance … (n_estimators=200)")
             rf_sel = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
             rf_sel.fit(X_train, y_train)
@@ -1295,7 +1267,6 @@ with tab_compare:
             st.warning(f"⚠️  Skipped **{sn}**: {se}")
 
         if results:
-            # Summary table
             st.markdown('<div class="sec"><div class="sec-dot" style="background:#5bf6c8"></div>'
                         '<div class="sec-lbl">Performance Summary — Test Set</div></div>', unsafe_allow_html=True)
             rows = []
@@ -1321,7 +1292,6 @@ with tab_compare:
                 unsafe_allow_html=True,
             )
 
-            # Bar charts — Accuracy, Macro-F1, per-class F1
             st.markdown('<div class="sec"><div class="sec-dot" style="background:#f6c85b"></div>'
                         '<div class="sec-lbl">Metric Comparison</div></div>', unsafe_allow_html=True)
             names  = list(results.keys())
@@ -1348,7 +1318,6 @@ with tab_compare:
             st.pyplot(fig, use_container_width=True)
             plt.close()
 
-            # Per-class F1 grouped bar
             st.markdown('<div class="sec"><div class="sec-dot" style="background:#5b8df6"></div>'
                         '<div class="sec-lbl">Per-Class F1 Score</div></div>', unsafe_allow_html=True)
             n_m = len(names)
@@ -1378,7 +1347,6 @@ with tab_compare:
             st.pyplot(fig, use_container_width=True)
             plt.close()
 
-            # Confusion matrices
             st.markdown('<div class="sec"><div class="sec-dot" style="background:#f65b8d"></div>'
                         '<div class="sec-lbl">Confusion Matrices — Test Set</div></div>', unsafe_allow_html=True)
             cm_cols = st.columns(min(n_m, 3))
@@ -1387,8 +1355,7 @@ with tab_compare:
                 cm     = confusion_matrix(y_te_c, res["preds"], labels=[0, 1, 2])
                 fig2, ax2 = plt.subplots(figsize=(4, 3.5), facecolor="#13161e")
                 ax2.set_facecolor("#1a1e2b")
-                im = ax2.imshow(cm, interpolation="nearest",
-                                cmap=plt.cm.Blues, vmin=0)
+                im = ax2.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues, vmin=0)
                 plt.colorbar(im, ax=ax2, fraction=0.046, pad=0.04)
                 ax2.set_xticks([0, 1, 2])
                 ax2.set_yticks([0, 1, 2])
@@ -1410,7 +1377,6 @@ with tab_compare:
                 ax_col.pyplot(fig2, use_container_width=True)
                 plt.close()
 
-            # Full classification report for best model
             st.markdown(f'<div class="sec"><div class="sec-dot" style="background:#a78bfa"></div>'
                         f'<div class="sec-lbl">Full Report — {best_name}</div></div>', unsafe_allow_html=True)
             report = classification_report(

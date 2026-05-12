@@ -22,13 +22,9 @@ for pkg in ['punkt', 'stopwords', 'wordnet', 'averaged_perceptron_tagger',
 
 COLORS = ['#4C8EDA', '#E8593C', '#1D9E75', '#7F77DD', '#EF9F27',
           '#F4845F', '#56B4E9', '#CC79A7', '#D55E00', '#009E73', '#F0E442']
-
-# ─────────────────────────────────────────────
 # LOAD DATA
-# ─────────────────────────────────────────────
 df = pd.read_csv('./dataset/raw/train_data.csv')
 
-# ── Must mirror Preprocessing_m2.py exactly ──────────────────────
 # Preprocessing drops duplicates and resets the index before saving
 # idx_train / idx_test. Without this, the index sizes won't match.
 n_before = len(df)
@@ -62,9 +58,7 @@ for col in TEXT_COLS.values():
 text_df = df[list(TEXT_COLS.values())].copy()
 text_df.index = df.index
 
-# ─────────────────────────────────────────────────────────────────
 # LOAD SPLIT INDICES FROM PREPROCESSING_M2.PY
-# ─────────────────────────────────────────────────────────────────
 idx_train_path = './dataset/processed/idx_train.npy'
 idx_test_path  = './dataset/processed/idx_test.npy'
 
@@ -82,9 +76,7 @@ print(f"  Total rows in df   : {len(df)}")
 assert len(idx_train) + len(idx_test) == len(df), \
     "Index files don't cover all rows — re-run Preprocessing_m2.py."
 
-# ─────────────────────────────────────────────────────────────────
 # STEP 1 — RAW TEXT STATISTICS + SPARSITY CHECK
-# ─────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
 print("STEP 1: Raw Text Statistics")
 print("="*60)
@@ -136,9 +128,8 @@ plt.savefig('./visualizations/plot_nlp_01_raw_word_counts.png', dpi=130, bbox_in
 plt.close()
 print("\nSaved: plot_nlp_01_raw_word_counts.png")
 
-# ─────────────────────────────────────────────────────────────────
+
 # STEP 2 — TEXT CLEANING
-# ─────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
 print("STEP 2: Text Cleaning")
 print("="*60)
@@ -196,11 +187,9 @@ plt.savefig('./visualizations/plot_nlp_02_cleaning_before_after.png', dpi=130, b
 plt.close()
 print("Saved: plot_nlp_02_cleaning_before_after.png")
 
-# ─────────────────────────────────────────────────────────────────
-# STEP 2b — TEXT LENGTH FEATURES  ← NEW
+
 # Medium games have longer AboutText than Low but shorter than High.
 # This is a direct numerical signal — add it as standalone features.
-# ─────────────────────────────────────────────────────────────────
 print("\n" + "="*60)
 print("STEP 2b: Text Length Features (Medium signal)")
 print("="*60)
@@ -228,11 +217,9 @@ for feat in length_features_all:
     train_vals = length_train[feat]
     print(f"  {feat}: train mean={train_vals.mean():.2f}  std={train_vals.std():.2f}")
 
-# ─────────────────────────────────────────────────────────────────
-# STEP 3 — TF-IDF + LSA PER FIELD
-# ← FIX: lowered min_df from 3→2 for about+detail so Medium-specific
+#  lowered min_df from 3→2 for about+detail so Medium-specific
 #         vocabulary survives the frequency filter
-# ─────────────────────────────────────────────────────────────────
+
 print("\n" + "="*60)
 print("STEP 3: TF-IDF + LSA per Field (8 components each)")
 print("="*60)
@@ -298,7 +285,7 @@ print(f"  Total NLP features : {nlp_train.shape[1]}")
 print(f"  Train shape        : {nlp_train.shape}  (pre-SMOTE original rows)")
 print(f"  Test shape         : {nlp_test.shape}")
 
-# ── Plot 3: Explained variance per field ─────────────────────────
+#  Plot 3: Explained variance per field
 fig, ax = plt.subplots(figsize=(9, 4), facecolor='#F8F7F4')
 ax.set_facecolor('#F0EFE8')
 field_vars = [(k, svd_models[k].explained_variance_ratio_.cumsum()[-1] * 100)
@@ -432,7 +419,7 @@ if 'GamePopularity' in df.columns:
     plt.close()
     print("Saved: plot_nlp_07_lsa_feature_correlations.png")
 
-# ── Plot 8: Text length by class (NEW) ───────────────────────────
+# ── Plot 8: Text length by class for classification
 if 'GamePopularity' in df.columns:
     fig, axes = plt.subplots(1, 3, figsize=(14, 4), facecolor='#F8F7F4')
     fig.suptitle('Text Length by Class — Medium is in the Middle Band',
@@ -458,13 +445,11 @@ if 'GamePopularity' in df.columns:
     plt.close()
     print("Saved: plot_nlp_08_text_length_by_class.png")
 
-# ─────────────────────────────────────────────────────────────────
 # SAVE
-# ─────────────────────────────────────────────────────────────────
 os.makedirs('./dataset/processed', exist_ok=True)
 os.makedirs('./models', exist_ok=True)
 
-# ── FIX: save TWO files ──────────────────────────────────────────
+#  save TWO files ──────────────────────────────────────────
 # nlp_features_train.csv  → 9085 rows, aligned with idx_train (pre-SMOTE)
 #   Used in classification.py: merge into X_train BEFORE SMOTE
 # nlp_features_test.csv   → 2272 rows, aligned with idx_test
